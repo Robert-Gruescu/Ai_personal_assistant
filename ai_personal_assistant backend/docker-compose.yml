@@ -1,0 +1,57 @@
+version: "3.8"
+
+services:
+  # AI Personal Assistant Backend
+  assistant-backend:
+    build: .
+    container_name: ai-assistant-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DATABASE_URL=sqlite:////app/data/assistant.db
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SERPAPI_KEY=${SERPAPI_KEY:-}
+      - VOICE_LANGUAGE=${VOICE_LANGUAGE:-ro-RO}
+      - TTS_LANGUAGE=${TTS_LANGUAGE:-ro}
+    volumes:
+      # Persist database
+      - assistant_data:/app/data
+      # Persist TTS cache
+      - tts_cache:/tmp/tts_cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: PostgreSQL Database (uncomment to use)
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: ai-assistant-db
+  #   environment:
+  #     POSTGRES_USER: assistant
+  #     POSTGRES_PASSWORD: assistant_secret
+  #     POSTGRES_DB: assistant_db
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+  #   restart: unless-stopped
+
+volumes:
+  assistant_data:
+    driver: local
+  tts_cache:
+    driver: local
+  # postgres_data:
+  #   driver: local
+
+networks:
+  default:
+    name: ai-assistant-network

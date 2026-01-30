@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# Virtual environments
+.virtualenv/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment variables - NEVER commit these!
+.env
+
+# Google OAuth credentials - NEVER commit these!
+credentials.json
+token.pickle
+*.pickle
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Audio files
+audio_files/
+*.mp3
+*.wav
+*.ogg
+
+# Logs
+*.log
+logs/
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Cache
+.cache/
+.pytest_cache/
+
+# OS files
+.DS_Store
+Thumbs.db

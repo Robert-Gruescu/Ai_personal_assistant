@@ -1,0 +1,85 @@
+# ===========================================
+# AI Personal Assistant - Main .gitignore
+# ===========================================
+
+# Python Virtual Environment
+.venv/
+venv/
+env/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Environment variables - NEVER commit!
+.env
+*.env
+
+# Google OAuth credentials - NEVER commit!
+credentials.json
+token.pickle
+*.pickle
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Audio files
+audio_files/
+*.mp3
+*.wav
+*.ogg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Flutter/Dart
+**/build/
+**/.dart_tool/
+**/.packages
+**/.pub-cache/
+**/.pub/
+**/pubspec.lock
+
+# Windows
+*.exe
+*.dll
+*.pdb
+
+# macOS
+.DS_Store
+*.dSYM/
+
+# Android
+**/android/.gradle/
+**/android/local.properties
+**/android/*.iml
+
+# iOS
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+
+# Misc
+*.cache
+.temp/
+tmp/
