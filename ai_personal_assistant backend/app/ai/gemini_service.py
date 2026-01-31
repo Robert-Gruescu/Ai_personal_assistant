@@ -137,10 +137,10 @@ Răspunde DOAR cu un JSON valid în formatul:
 }}
 
 INTENT-URI POSIBILE:
-- "add_task": adaugă un task (action_data: {{title: "...", description: "...", due_date: null, priority: "medium"}})
+- "add_task": adaugă task-uri (action_data: {{title: "...", description: "...", due_date: null, priority: "medium"}} SAU pentru multiple: [{{title: "..."}} , {{title: "..."}}])
 - "list_tasks": listează task-uri
 - "complete_task": marchează task complet (action_data: {{task_id: N}} sau {{task_title: "..."}})
-- "add_shopping_item": adaugă la cumpărături (action_data: {{name: "...", quantity: "...", category: "..."}})
+- "add_shopping_item": adaugă la cumpărături (action_data: {{name: "...", quantity: "...", category: "..."}} SAU pentru multiple: [{{name: "lapte"}}, {{name: "pâine"}}, {{name: "ouă"}}])
 - "list_shopping": listează cumpărături
 - "remove_shopping_item": șterge de pe listă (action_data: {{item_id: N}} sau {{item_name: "..."}})
 - "send_email": trimite email (action_data: {{to: "...", subject: "...", body: "..."}})
@@ -153,6 +153,11 @@ INTENT-URI POSIBILE:
 - "add_calendar_event": adaugă eveniment simplu în calendar (action_data: {{title: "...", date: "YYYY-MM-DD", time: "HH:MM", description: "...", duration_minutes: 60}})
 - "list_calendar_events": listează evenimentele din calendar
 - "cancel_calendar_event": anulează eveniment (action_data: {{title: "..."}} sau {{event_id: N}})
+
+REGULI PENTRU MULTIPLE PRODUSE/TASK-URI:
+- Când utilizatorul cere să adaugi MAI MULTE produse sau task-uri deodată, folosește action_data ca ARRAY
+- Exemplu: "adaugă lapte, pâine și ouă" -> action_data: [{{name: "lapte"}}, {{name: "pâine"}}, {{name: "ouă"}}]
+- Exemplu: "am 3 task-uri: X, Y, Z" -> action_data: [{{title: "X"}}, {{title: "Y"}}, {{title: "Z"}}]
 - "general": conversație generală (fără acțiune specială)
 
 REGULI PENTRU CITIRE EMAIL:

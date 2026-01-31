@@ -62,9 +62,42 @@ class ActionExecutor:
     # ============ TASK ACTIONS ============
     
     def _add_task(self, data: Dict[str, Any], db: Session) -> Dict[str, Any]:
-        """Add a new task"""
+        """Add a new task or multiple tasks"""
         try:
-            # Parse due date if provided
+            # Check if data is a list (multiple tasks)
+            if isinstance(data, list):
+                added_tasks = []
+                for task_data in data:
+                    due_date = None
+                    if task_data.get("due_date"):
+                        due_date = self._parse_date(task_data["due_date"])
+                    
+                    task = Task(
+                        title=task_data.get("title", "Task fără titlu"),
+                        description=task_data.get("description"),
+                        due_date=due_date,
+                        priority=task_data.get("priority", 1),
+                        category=task_data.get("category")
+                    )
+                    db.add(task)
+                    added_tasks.append(task_data.get("title", "Task"))
+                
+                db.commit()
+                
+                # Get full list after adding
+                all_tasks = db.query(Task).filter(Task.is_completed == False).all()
+                all_task_titles = [t.title for t in all_tasks]
+                
+                return {
+                    "success": True,
+                    "action": "add_task",
+                    "count": len(added_tasks),
+                    "message": f"Am adăugat {len(added_tasks)} task-uri: {', '.join(added_tasks)}.",
+                    "full_list": all_task_titles,
+                    "total_tasks": len(all_task_titles)
+                }
+            
+            # Single task
             due_date = None
             if data.get("due_date"):
                 due_date = self._parse_date(data["due_date"])
@@ -81,11 +114,17 @@ class ActionExecutor:
             db.commit()
             db.refresh(task)
             
+            # Get full list after adding
+            all_tasks = db.query(Task).filter(Task.is_completed == False).all()
+            all_task_titles = [t.title for t in all_tasks]
+            
             return {
                 "success": True,
                 "action": "add_task",
                 "task_id": task.id,
-                "message": f"Task-ul '{task.title}' a fost adăugat."
+                "message": f"Task-ul '{task.title}' a fost adăugat.",
+                "full_list": all_task_titles,
+                "total_tasks": len(all_task_titles)
             }
         except Exception as e:
             db.rollback()
@@ -187,11 +226,41 @@ class ActionExecutor:
     # ============ SHOPPING ACTIONS ============
     
     def _add_shopping_item(self, data: Dict[str, Any], db: Session) -> Dict[str, Any]:
-        """Add item to shopping list"""
+        """Add item or multiple items to shopping list"""
         try:
+            # Check if data is a list (multiple items)
+            if isinstance(data, list):
+                added_items = []
+                for item_data in data:
+                    item = ShoppingItem(
+                        name=item_data.get("name", "Item"),
+                        quantity=str(item_data.get("quantity", "1")) if item_data.get("quantity") else "1",
+                        category=item_data.get("category"),
+                        notes=item_data.get("notes"),
+                        price_estimate=item_data.get("price")
+                    )
+                    db.add(item)
+                    added_items.append(item_data.get("name", "Item"))
+                
+                db.commit()
+                
+                # Get full list after adding
+                all_items = db.query(ShoppingItem).filter(ShoppingItem.is_purchased == False).all()
+                all_item_names = [i.name for i in all_items]
+                
+                return {
+                    "success": True,
+                    "action": "add_shopping_item",
+                    "count": len(added_items),
+                    "message": f"Am adăugat {len(added_items)} produse pe listă: {', '.join(added_items)}.",
+                    "full_list": all_item_names,
+                    "total_items": len(all_item_names)
+                }
+            
+            # Single item
             item = ShoppingItem(
                 name=data.get("name", "Item"),
-                quantity=str(data.get("quantity", "1")),
+                quantity=str(data.get("quantity", "1")) if data.get("quantity") else "1",
                 category=data.get("category"),
                 notes=data.get("notes"),
                 price_estimate=data.get("price")
@@ -201,11 +270,17 @@ class ActionExecutor:
             db.commit()
             db.refresh(item)
             
+            # Get full list after adding
+            all_items = db.query(ShoppingItem).filter(ShoppingItem.is_purchased == False).all()
+            all_item_names = [i.name for i in all_items]
+            
             return {
                 "success": True,
                 "action": "add_shopping_item",
                 "item_id": item.id,
-                "message": f"'{item.name}' a fost adăugat la lista de cumpărături."
+                "message": f"'{item.name}' a fost adăugat la lista de cumpărături.",
+                "full_list": all_item_names,
+                "total_items": len(all_item_names)
             }
         except Exception as e:
             db.rollback()
