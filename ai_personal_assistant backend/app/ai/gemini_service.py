@@ -38,36 +38,20 @@ class GeminiService:
         self.model = None
         self.model_name = None
         
-        # Try each model until one works
-        for model_name in self.AVAILABLE_MODELS:
-            try:
-                print(f"🔄 Trying model: {model_name}")
-                test_model = genai.GenerativeModel(
-                    model_name,
-                    generation_config=genai.GenerationConfig(
-                        temperature=0.7,
-                        top_p=0.9,
-                        top_k=40,
-                        max_output_tokens=2048,
-                    )
-                )
-                # Actually test the model with a minimal request
-                test_response = test_model.generate_content("Salut")
-                if test_response.text:
-                    self.model = test_model
-                    self.model_name = model_name
-                    print(f"✅ Gemini model '{model_name}' verified and working!")
-                    break
-            except Exception as e:
-                error_str = str(e)
-                if "quota" in error_str.lower() or "429" in error_str or "resource" in error_str.lower():
-                    print(f"⏳ Model '{model_name}' quota exceeded, trying next...")
-                else:
-                    print(f"❌ Model '{model_name}' failed: {e}")
-                continue
-        
-        if not self.model:
-            print("❌ No Gemini models available! Using fallback responses.")
+        # Use first available model without testing (to save API quota)
+        model_name = self.AVAILABLE_MODELS[0]
+        print(f"🔄 Using model: {model_name}")
+        self.model = genai.GenerativeModel(
+            model_name,
+            generation_config=genai.GenerationConfig(
+                temperature=0.7,
+                top_p=0.9,
+                top_k=40,
+                max_output_tokens=2048,
+            )
+        )
+        self.model_name = model_name
+        print(f"✅ Gemini model '{model_name}' configured (no startup test to save quota)")
         
         self.system_prompt = self._build_system_prompt()
         
@@ -266,7 +250,7 @@ IMPORTANT:
             
             # Validate required fields
             if "response" not in result:
-                result["response"] = response_text
+                result["response"] = "Am înțeles cererea ta."
             if "intent" not in result:
                 result["intent"] = "general"
             if "action_data" not in result:
@@ -279,11 +263,40 @@ IMPORTANT:
             return result
             
         except json.JSONDecodeError:
-            # If not valid JSON, return as general response
+            # If not valid JSON, try to extract response field manually
+            import re
+            match = re.search(r'"response"\s*:\s*"((?:[^"\\]|\\.)*)"', response_text)
+            if match:
+                extracted_response = match.group(1).replace('\\"', '"').replace('\\n', ' ')
+            else:
+                # Remove JSON artifacts and return clean text
+                extracted_response = response_text
+                for pattern in ['```json', '```', '{', '}', '"response":', '"intent":', '"action_data":']:
+                    extracted_response = extracted_response.replace(pattern, '')
+                extracted_response = extracted_response.strip()
+                if not extracted_response or len(extracted_response) < 5:
+                    extracted_response = "Am înțeles cererea ta."
+            
+            # Try to extract intent from raw text
+            intent = "general"
+            intent_match = re.search(r'"intent"\s*:\s*"([^"]+)"', response_text)
+            if intent_match:
+                intent = intent_match.group(1)
+            
+            # Try to extract action_data
+            action_data = None
+            if intent in ["add_shopping_item", "add_task"]:
+                name_match = re.search(r'"name"\s*:\s*"([^"]+)"', response_text)
+                if name_match:
+                    action_data = {"name": name_match.group(1)}
+                title_match = re.search(r'"title"\s*:\s*"([^"]+)"', response_text)
+                if title_match:
+                    action_data = {"title": title_match.group(1)}
+            
             return {
-                "response": response_text,
-                "intent": "general",
-                "action_data": None,
+                "response": extracted_response,
+                "intent": intent,
+                "action_data": action_data,
                 "needs_confirmation": False,
                 "follow_up_question": None
             }

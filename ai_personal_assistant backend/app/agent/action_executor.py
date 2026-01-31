@@ -317,53 +317,100 @@ class ActionExecutor:
             return {"success": False, "error": str(e)}
     
     def _remove_shopping_item(self, data: Dict[str, Any], db: Session) -> Dict[str, Any]:
-        """Remove or mark as purchased"""
+        """Remove ALL items with exact name match or mark as purchased"""
         try:
-            item = None
+            items = []
+            search_name = None
             
             if data.get("item_id"):
                 item = db.query(ShoppingItem).filter(ShoppingItem.id == data["item_id"]).first()
+                if item:
+                    items = [item]
+                    search_name = item.name
             elif data.get("item_name"):
-                # Normalize search term - remove common Romanian suffixes and endings
-                search_term = data['item_name'].lower().strip()
-                # Remove common suffixes: -le, -ul, -a, -ele, -urile, -ii
+                search_name = data['item_name'].strip()
+                
+                # Normalize search term - remove common Romanian suffixes
+                normalized_search = search_name.lower()
                 for suffix in ['urile', 'ele', 'ule', 'ul', 'le', 'ii', 'a']:
-                    if search_term.endswith(suffix) and len(search_term) > len(suffix) + 2:
-                        search_term = search_term[:-len(suffix)]
+                    if normalized_search.endswith(suffix) and len(normalized_search) > len(suffix) + 2:
+                        normalized_search = normalized_search[:-len(suffix)]
                         break
                 
-                # First try exact match on normalized term
-                item = db.query(ShoppingItem).filter(
-                    ShoppingItem.name.ilike(f"%{search_term}%")
-                ).filter(ShoppingItem.is_purchased == False).first()
+                # First: try EXACT match (case-insensitive) - this is the priority
+                items = db.query(ShoppingItem).filter(
+                    ShoppingItem.is_purchased == False,
+                    ShoppingItem.name.ilike(search_name)
+                ).all()
                 
-                # If not found, try with original term
-                if not item:
-                    item = db.query(ShoppingItem).filter(
-                        ShoppingItem.name.ilike(f"%{data['item_name']}%")
-                    ).filter(ShoppingItem.is_purchased == False).first()
+                # Second: try exact match with normalized term
+                if not items:
+                    items = db.query(ShoppingItem).filter(
+                        ShoppingItem.is_purchased == False,
+                        ShoppingItem.name.ilike(normalized_search)
+                    ).all()
+                
+                # Third: try matching names that START with the search term (for singular/plural variants)
+                if not items:
+                    # Get all unpurchased items
+                    all_items = db.query(ShoppingItem).filter(ShoppingItem.is_purchased == False).all()
+                    for item in all_items:
+                        item_name_lower = item.name.lower().strip()
+                        # Check if names match when normalized (removing suffixes from both)
+                        item_normalized = item_name_lower
+                        for suffix in ['urile', 'ele', 'ule', 'ul', 'le', 'ii', 'a']:
+                            if item_normalized.endswith(suffix) and len(item_normalized) > len(suffix) + 2:
+                                item_normalized = item_normalized[:-len(suffix)]
+                                break
+                        
+                        # Match if normalized versions are the same
+                        if item_normalized == normalized_search or item_name_lower == search_name.lower():
+                            items.append(item)
             
-            if not item:
-                return {"success": False, "error": "Produsul nu a fost găsit pe listă."}
+            if not items:
+                return {"success": False, "error": f"Produsul '{search_name}' nu a fost găsit pe listă."}
             
-            name = item.name
+            deleted_count = len(items)
+            first_name = items[0].name
             
-            # Mark as purchased or delete
+            # Mark as purchased or delete ALL matching items
             if data.get("purchased", False):
-                item.is_purchased = True
+                for item in items:
+                    item.is_purchased = True
                 db.commit()
+                
+                if deleted_count == 1:
+                    msg = f"'{first_name}' a fost marcat ca cumpărat."
+                else:
+                    msg = f"Am marcat {deleted_count} produse '{first_name}' ca cumpărate."
+                
                 return {
                     "success": True,
                     "action": "mark_purchased",
-                    "message": f"'{name}' a fost marcat ca cumpărat."
+                    "count": deleted_count,
+                    "message": msg
                 }
             else:
-                db.delete(item)
+                for item in items:
+                    db.delete(item)
                 db.commit()
+                
+                if deleted_count == 1:
+                    msg = f"'{first_name}' a fost șters de pe listă."
+                else:
+                    msg = f"Am șters {deleted_count} produse '{first_name}' de pe listă."
+                
+                # Get remaining items
+                remaining_items = db.query(ShoppingItem).filter(ShoppingItem.is_purchased == False).all()
+                remaining_names = [i.name for i in remaining_items]
+                
                 return {
                     "success": True,
                     "action": "remove_shopping_item",
-                    "message": f"'{name}' a fost șters de pe listă."
+                    "count": deleted_count,
+                    "message": msg,
+                    "remaining_items": remaining_names,
+                    "remaining_count": len(remaining_names)
                 }
         except Exception as e:
             db.rollback()

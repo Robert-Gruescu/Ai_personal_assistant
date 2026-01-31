@@ -106,6 +106,16 @@ async def process_voice(
         ai_result = gemini_service.chat(user_text, conversation_history)
         response_text = ai_result.get("response", "Îmi pare rău, nu am putut procesa cererea.")
         
+        # Clean up response if it contains raw JSON
+        if response_text.strip().startswith("```json") or response_text.strip().startswith("{"):
+            # Extract just the response field from raw JSON if possible
+            import re
+            match = re.search(r'"response"\s*:\s*"([^"]*)"', response_text)
+            if match:
+                response_text = match.group(1)
+            else:
+                response_text = "Îmi pare rău, am întâmpinat o problemă. Poți repeta?"
+        
         # 5. Handle search intent if detected
         intent = ai_result.get("intent")
         action_result = None
@@ -194,6 +204,27 @@ async def process_voice(
                             response_text = summary_result.get("response", f"Email de la {email['from']}: {email['subject']}")
                         else:
                             response_text = action_result.get("message", "Nu am putut rezuma emailul.")
+                    elif intent == "add_shopping_item":
+                        # Include the full list in response
+                        full_list = action_result.get("full_list", [])
+                        if full_list:
+                            response_text = f"{action_result['message']} Lista completă: {', '.join(full_list)}."
+                        else:
+                            response_text = action_result['message']
+                    elif intent == "add_task":
+                        # Include the full list in response
+                        full_list = action_result.get("full_list", [])
+                        if full_list:
+                            response_text = f"{action_result['message']} Task-uri active: {', '.join(full_list)}."
+                        else:
+                            response_text = action_result['message']
+                    elif intent == "remove_shopping_item":
+                        # Show remaining items after deletion
+                        remaining = action_result.get("remaining_items", [])
+                        if remaining:
+                            response_text = f"{action_result['message']} Pe listă au mai rămas: {', '.join(remaining)}."
+                        else:
+                            response_text = f"{action_result['message']} Lista de cumpărături este acum goală."
                     elif action_result.get("message"):
                         response_text = action_result['message']
                 elif not action_result.get("success") and action_result.get("error"):
