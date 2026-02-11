@@ -35,7 +35,7 @@ dependencies:
   # HTTP Client
   http: ^1.2.0
   
-  # Audio Recording & Playback for Windows
+  # Audio Recording & Playback
   record: ^6.0.0
   audioplayers: ^6.4.0
   
@@ -46,6 +46,56 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
+  
+  # ============ LOCAL BACKEND DEPENDENCIES ============
+  
+  # Local Database (Hive - NoSQL, fast, works on mobile)
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  
+  # Google Gemini AI SDK for Dart
+  google_generative_ai: ^0.4.6
+  
+  # Speech Recognition (STT)
+  speech_to_text: ^7.0.0
+  
+  # Text to Speech (TTS)
+  flutter_tts: ^4.2.0
+  
+  # Email sending
+  mailer: ^6.1.2
+  
+  # Google APIs (Calendar, Gmail)
+  googleapis: ^14.0.0
+  googleapis_auth: ^1.6.0
+  extension_google_sign_in_as_googleapis_auth: ^2.0.12
+  
+  # Local notifications for reminders
+  flutter_local_notifications: ^19.0.0
+  
+  # Timezone for notifications
+  timezone: ^0.10.0
+  
+  # UUID generation
+  uuid: ^4.5.1
+  
+  # Shared preferences for settings
+  shared_preferences: ^2.3.4
+  
+  # Internet connectivity check
+  connectivity_plus: ^6.1.1
+  
+  # Environment variables / config
+  flutter_dotenv: ^5.2.1
+  
+  # URL launcher for opening links
+  url_launcher: ^6.3.1
+  
+  # Android Intent for calendar integration
+  android_intent_plus: ^5.0.2
+  
+  # Intl for date formatting
+  intl: ^0.20.1
 
 dev_dependencies:
   flutter_test:
@@ -57,6 +107,16 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  
+  # App Icon Generator
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  adaptive_icon_background: "#1E88E5"
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -69,7 +129,9 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # To add assets to your application, add an assets section, like this:
+  # NOTE: API keys and configuration are stored using SharedPreferences
+  # Configure them in the app settings
+
   # assets:
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg
