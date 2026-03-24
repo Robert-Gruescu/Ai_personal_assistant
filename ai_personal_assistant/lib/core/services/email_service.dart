@@ -176,9 +176,13 @@ class EmailService {
       );
     }
 
+    final imapEndpoint = '${_imapHost ?? 'imap.gmail.com'}:${_imapPort}';
+
     // Note: Full IMAP support requires additional implementation
     // For now, return a placeholder message
-    return EmailResult.error('Citirea emailurilor nu este încă implementată.');
+    return EmailResult.error(
+      'Citirea emailurilor prin IMAP ($imapEndpoint) nu este încă implementată.',
+    );
   }
 
   /// Search emails (placeholder)
