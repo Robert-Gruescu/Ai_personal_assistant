@@ -73,6 +73,91 @@ class SearchResponse {
   }
 }
 
+class StorePriceMatch {
+  final String item;
+  final String store;
+  final double price;
+  final String sourceTitle;
+  final String sourceLink;
+
+  StorePriceMatch({
+    required this.item,
+    required this.store,
+    required this.price,
+    required this.sourceTitle,
+    required this.sourceLink,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'item': item,
+    'store': store,
+    'price': price,
+    'source_title': sourceTitle,
+    'source_link': sourceLink,
+  };
+}
+
+class StorePriceSummary {
+  final String store;
+  final double estimatedTotal;
+  final int matchedItems;
+  final int missingItems;
+
+  StorePriceSummary({
+    required this.store,
+    required this.estimatedTotal,
+    required this.matchedItems,
+    required this.missingItems,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'store': store,
+    'estimated_total': estimatedTotal,
+    'matched_items': matchedItems,
+    'missing_items': missingItems,
+  };
+}
+
+class ShoppingPriceComparisonResponse {
+  final bool success;
+  final String? recommendedStore;
+  final String? rationale;
+  final List<StorePriceSummary> storeSummaries;
+  final List<StorePriceMatch> matchedPrices;
+  final List<String> scannedItems;
+  final String? error;
+
+  ShoppingPriceComparisonResponse({
+    required this.success,
+    this.recommendedStore,
+    this.rationale,
+    required this.storeSummaries,
+    required this.matchedPrices,
+    required this.scannedItems,
+    this.error,
+  });
+
+  factory ShoppingPriceComparisonResponse.error(String message) {
+    return ShoppingPriceComparisonResponse(
+      success: false,
+      storeSummaries: const [],
+      matchedPrices: const [],
+      scannedItems: const [],
+      error: message,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'success': success,
+    'recommended_store': recommendedStore,
+    'rationale': rationale,
+    'store_summaries': storeSummaries.map((s) => s.toJson()).toList(),
+    'matched_prices': matchedPrices.map((m) => m.toJson()).toList(),
+    'scanned_items': scannedItems,
+    'error': error,
+  };
+}
+
 /// Internet Search Service using DuckDuckGo
 class SearchService {
   static final SearchService _instance = SearchService._internal();
@@ -81,6 +166,13 @@ class SearchService {
 
   static const String _duckDuckGoInstantUrl = 'https://api.duckduckgo.com/';
   static const String _duckDuckGoHtmlUrl = 'https://html.duckduckgo.com/html/';
+
+  static const List<String> _defaultStores = [
+    'Lidl',
+    'Kaufland',
+    'Carrefour',
+    'Auchan',
+  ];
 
   /// Search the internet for information
   Future<SearchResponse> search(String query, {int numResults = 5}) async {
@@ -274,5 +366,147 @@ class SearchService {
     // Add "news" or "știri" to the query for news results
     final newsQuery = '$query știri ultimele';
     return search(newsQuery, numResults: numResults);
+  }
+
+  /// Compare live prices for a shopping list across stores.
+  /// Uses live web snippets, so results are estimates and depend on available indexed offers.
+  Future<ShoppingPriceComparisonResponse> compareShoppingListPrices(
+    List<String> items, {
+    List<String>? stores,
+  }) async {
+    final cleanItems = items
+        .map((i) => i.trim())
+        .where((i) => i.isNotEmpty)
+        .toSet()
+        .toList();
+
+    if (cleanItems.isEmpty) {
+      return ShoppingPriceComparisonResponse.error(
+        'Lista de produse este goală.',
+      );
+    }
+
+    final scanItems = cleanItems.take(8).toList();
+    final scanStores = (stores == null || stores.isEmpty)
+        ? _defaultStores
+        : stores.map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+
+    if (scanStores.isEmpty) {
+      return ShoppingPriceComparisonResponse.error(
+        'Nu am magazine pentru comparație.',
+      );
+    }
+
+    try {
+      final matches = <StorePriceMatch>[];
+
+      for (final item in scanItems) {
+        for (final store in scanStores) {
+          final match = await _findLivePrice(item: item, store: store);
+          if (match != null) {
+            matches.add(match);
+          }
+        }
+      }
+
+      if (matches.isEmpty) {
+        return ShoppingPriceComparisonResponse.error(
+          'Nu am găsit suficiente prețuri live pentru comparație acum.',
+        );
+      }
+
+      final summaries = <StorePriceSummary>[];
+      for (final store in scanStores) {
+        final storeMatches = matches.where((m) => m.store == store).toList();
+        final total = storeMatches.fold<double>(0, (sum, m) => sum + m.price);
+        final matchedCount = storeMatches.length;
+        final missingCount = scanItems.length - matchedCount;
+
+        // Penalize missing prices to avoid over-favoring stores with partial data.
+        final penalty = missingCount * 12.0;
+        summaries.add(
+          StorePriceSummary(
+            store: store,
+            estimatedTotal: total + penalty,
+            matchedItems: matchedCount,
+            missingItems: missingCount,
+          ),
+        );
+      }
+
+      summaries.sort((a, b) => a.estimatedTotal.compareTo(b.estimatedTotal));
+      final best = summaries.first;
+
+      final bestMatches = matches.where((m) => m.store == best.store).toList()
+        ..sort((a, b) => a.price.compareTo(b.price));
+
+      final highlighted = bestMatches.take(3).map((m) => m.item).toList();
+      final rationale = highlighted.isNotEmpty
+          ? 'Estimarea cea mai bună este la ${best.store}. Produse avantajoase acum: ${highlighted.join(', ')}.'
+          : 'Estimarea totală cea mai bună este la ${best.store}.';
+
+      return ShoppingPriceComparisonResponse(
+        success: true,
+        recommendedStore: best.store,
+        rationale: rationale,
+        storeSummaries: summaries,
+        matchedPrices: matches,
+        scannedItems: scanItems,
+      );
+    } catch (e) {
+      return ShoppingPriceComparisonResponse.error(
+        'Eroare la compararea prețurilor live: $e',
+      );
+    }
+  }
+
+  Future<StorePriceMatch?> _findLivePrice({
+    required String item,
+    required String store,
+  }) async {
+    final query = '$item preț $store România reducere săptămâna aceasta';
+    final results = await _searchDuckDuckGoHtml(query, 5);
+
+    for (final result in results) {
+      final price = _extractPrice('${result.title} ${result.snippet}');
+      if (price != null) {
+        return StorePriceMatch(
+          item: item,
+          store: store,
+          price: price,
+          sourceTitle: result.title,
+          sourceLink: result.link,
+        );
+      }
+    }
+
+    return null;
+  }
+
+  double? _extractPrice(String text) {
+    final normalized = text.toLowerCase().replaceAll(',', '.');
+
+    final withCurrency = RegExp(
+      r'(\d{1,4}(?:\.\d{1,2})?)\s*(lei|ron|r\.?o\.?n\.?)',
+      caseSensitive: false,
+    );
+    final currencyMatch = withCurrency.firstMatch(normalized);
+    if (currencyMatch != null) {
+      final value = double.tryParse(currencyMatch.group(1)!);
+      if (value != null && value > 0 && value < 5000) {
+        return value;
+      }
+    }
+
+    final generic = RegExp(r'\b(\d{1,3}(?:\.\d{1,2})?)\b');
+    final genericMatches = generic.allMatches(normalized).toList();
+    for (final match in genericMatches) {
+      final value = double.tryParse(match.group(1)!);
+      if (value != null && value >= 1 && value <= 1000) {
+        return value;
+      }
+    }
+
+    return null;
   }
 }

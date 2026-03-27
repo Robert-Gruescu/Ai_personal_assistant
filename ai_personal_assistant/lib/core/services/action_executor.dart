@@ -61,6 +61,7 @@ class ActionExecutor {
       'read_last_email': _readLastEmail,
       'search_emails': _searchEmails,
       'search_internet': _searchInternet,
+      'compare_shopping_prices': _compareShoppingPrices,
       'schedule_meeting': _scheduleMeeting,
       'add_calendar_event': _addCalendarEvent,
       'list_calendar_events': _listCalendarEvents,
@@ -226,12 +227,52 @@ class ActionExecutor {
         }
 
         final allItems = await _db.getAllShoppingItems(purchased: false);
+
+        List<String> storeSuggestions = _suggestStoresForShopping(addedItems);
+        String suggestionText = storeSuggestions.isNotEmpty
+            ? ' Îți recomand să verifici: ${storeSuggestions.join(', ')}.'
+            : '';
+        Map<String, dynamic>? liveComparisonData;
+
+        // For larger lists, compare live prices and recommend the best store this week.
+        if (addedItems.length >= 6) {
+          final liveComparison = await _search.compareShoppingListPrices(
+            addedItems,
+          );
+
+          if (liveComparison.success &&
+              liveComparison.recommendedStore != null &&
+              liveComparison.recommendedStore!.isNotEmpty) {
+            final topStore = liveComparison.recommendedStore!;
+            final topSummary = liveComparison.storeSummaries.firstWhere(
+              (s) => s.store == topStore,
+              orElse: () => liveComparison.storeSummaries.first,
+            );
+
+            final firstDealItems = liveComparison.matchedPrices
+                .where((m) => m.store == topStore)
+                .map((m) => m.item)
+                .toSet()
+                .take(3)
+                .toList();
+
+            suggestionText =
+                ' Recomandare live: săptămâna aceasta ieși mai bine la $topStore (estimare coș: ${topSummary.estimatedTotal.toStringAsFixed(2)} lei pentru ${topSummary.matchedItems}/${liveComparison.scannedItems.length} produse analizate).${firstDealItems.isNotEmpty ? ' Produse avantajoase: ${firstDealItems.join(', ')}.' : ''}';
+
+            storeSuggestions = [topStore];
+            liveComparisonData = liveComparison.toJson();
+          }
+        }
+
         return ActionResult.success(
-          'Am adăugat ${addedItems.length} produse: ${addedItems.join(", ")}.',
+          'Am adăugat ${addedItems.length} produse: ${addedItems.join(", ")}.${suggestionText}',
           data: {
             'count': addedItems.length,
             'items': addedItems,
             'total_items': allItems.length,
+            'store_suggestions': storeSuggestions,
+            if (liveComparisonData != null)
+              'live_price_comparison': liveComparisonData,
           },
         );
       }
@@ -448,6 +489,61 @@ class ActionExecutor {
       }
     } catch (e) {
       return ActionResult.error('Eroare la căutarea pe internet: $e');
+    }
+  }
+
+  Future<ActionResult> _compareShoppingPrices(Map<String, dynamic> data) async {
+    try {
+      final dynamic rawItems = data['items'];
+      final List<String> items = rawItems is List
+          ? rawItems.map((e) => e.toString()).toList()
+          : [];
+
+      final List<String> normalizedItems = items
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
+
+      if (normalizedItems.isEmpty) {
+        final current = await _db.getAllShoppingItems(purchased: false);
+        normalizedItems.addAll(current.map((e) => e.name));
+      }
+
+      if (normalizedItems.isEmpty) {
+        return ActionResult.error(
+          'Nu ai produse în lista de cumpărături pentru comparație.',
+        );
+      }
+
+      final comparison = await _search.compareShoppingListPrices(
+        normalizedItems,
+      );
+      if (!comparison.success || comparison.recommendedStore == null) {
+        return ActionResult.error(
+          comparison.error ??
+              'Nu am găsit suficiente date live pentru comparație.',
+        );
+      }
+
+      final topStore = comparison.recommendedStore!;
+      final topSummary = comparison.storeSummaries.firstWhere(
+        (s) => s.store == topStore,
+        orElse: () => comparison.storeSummaries.first,
+      );
+
+      final dealItems = comparison.matchedPrices
+          .where((m) => m.store == topStore)
+          .map((m) => m.item)
+          .toSet()
+          .take(4)
+          .toList();
+
+      return ActionResult.success(
+        'Pe baza prețurilor live, cel mai avantajos magazin acum este $topStore (estimare: ${topSummary.estimatedTotal.toStringAsFixed(2)} lei).${dealItems.isNotEmpty ? ' Produse cu preț bun: ${dealItems.join(', ')}.' : ''}',
+        data: comparison.toJson(),
+      );
+    } catch (e) {
+      return ActionResult.error('Eroare la compararea prețurilor: $e');
     }
   }
 
@@ -781,5 +877,55 @@ class ActionExecutor {
       }
     }
     return 2;
+  }
+
+  List<String> _suggestStoresForShopping(List<String> itemNames) {
+    if (itemNames.isEmpty) return const [];
+
+    final normalized = itemNames.map((e) => e.toLowerCase()).toList();
+
+    final hasFreshProduce = normalized.any(
+      (name) =>
+          name.contains('legume') ||
+          name.contains('fructe') ||
+          name.contains('salata') ||
+          name.contains('rosii') ||
+          name.contains('castraveti') ||
+          name.contains('mere') ||
+          name.contains('banane'),
+    );
+
+    final hasHousehold = normalized.any(
+      (name) =>
+          name.contains('detergent') ||
+          name.contains('hartie') ||
+          name.contains('burete') ||
+          name.contains('sapun') ||
+          name.contains('sampon'),
+    );
+
+    if (itemNames.length >= 10) {
+      return const [
+        'Kaufland (coș mare, promoții multe)',
+        'Carrefour (varietate mare de produse)',
+        'Auchan (bun pentru cumpărături în volum)',
+      ];
+    }
+
+    if (hasFreshProduce) {
+      return const [
+        'Lidl (preț bun la legume/fructe)',
+        'Piața locală (produse proaspete)',
+      ];
+    }
+
+    if (hasHousehold) {
+      return const [
+        'Carrefour (raion casă/curățenie)',
+        'Auchan (gamă largă non-food)',
+      ];
+    }
+
+    return const ['Lidl', 'Kaufland', 'Carrefour'];
   }
 }

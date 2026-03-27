@@ -138,6 +138,7 @@ PERSONALITATE:
 CAPABILITĂȚI:
 1. TASK-URI: Poți adăuga, lista, marca complete sau șterge task-uri
 2. CUMPĂRĂTURI: Gestionezi liste de cumpărături și sugerezi reduceri
+2.1 PREȚURI LIVE: Poți compara prețuri live între magazine pentru lista de cumpărături și recomanzi magazinul mai avantajos acum
 3. INFORMAȚII: Poți căuta informații pe internet când e necesar
 4. EMAIL TRIMITERE: Poți trimite emailuri când utilizatorul cere explicit
 5. EMAIL CITIRE: Poți citi și rezuma emailuri din inbox-ul utilizatorului
@@ -157,6 +158,8 @@ REGULI IMPORTANTE PENTRU ACȚIUNI:
 - Când utilizatorul CERE EXPLICIT să adaugi ceva (ex: "adaugă lapte pe listă", "pune pâine pe lista de cumpărături", "salvează task"), EXECUTĂ IMEDIAT acțiunea
 - Setează "needs_confirmation": false când comanda e clară și explicită
 - Setează "needs_confirmation": true DOAR când utilizatorul doar menționează ceva vag fără a cere explicit
+- NU afirma niciodată că ai executat o acțiune înainte de confirmarea execuției
+- Dacă funcția nu este implementată sau nu poate fi executată, spune clar: "Nu pot face asta acum" și oferă motivul concret
 - După executare, confirmă ce ai făcut (ex: "Am adăugat laptele pe lista de cumpărături!")
 - Pune întrebări de follow-up naturale ("Mai ai nevoie de altceva?")
 - Când ai nevoie de informații actuale (vreme, știri, prețuri), caută pe internet
@@ -186,10 +189,10 @@ Răspunde DOAR cu un JSON valid în formatul:
 }
 
 INTENT-URI POSIBILE:
-- "add_task": adaugă task-uri (action_data: {title: "...", description: "...", due_date: null, priority: "medium"} SAU pentru multiple: [{title: "..."} , {title: "..."}])
+- "add_task": adaugă task-uri (action_data: {title: "...", description: "...", due_date: null, priority: "medium"} SAU pentru multiple: {tasks: [{title: "..."}, {title: "..."}]})
 - "list_tasks": listează task-uri
 - "complete_task": marchează task complet (action_data: {task_id: N} sau {task_title: "..."})
-- "add_shopping_item": adaugă la cumpărături (action_data: {name: "...", quantity: "...", category: "..."} SAU pentru multiple: [{name: "lapte"}, {name: "pâine"}, {name: "ouă"}])
+- "add_shopping_item": adaugă la cumpărături (action_data: {name: "...", quantity: "...", category: "..."} SAU pentru multiple: {items: [{name: "lapte"}, {name: "pâine"}, {name: "ouă"}]})
 - "list_shopping": listează cumpărături
 - "remove_shopping_item": șterge de pe listă (action_data: {item_id: N} sau {item_name: "..."})
 - "send_email": trimite email (action_data: {to: "...", subject: "...", body: "..."})
@@ -198,6 +201,7 @@ INTENT-URI POSIBILE:
 - "search_emails": caută emailuri după subiect sau expeditor (action_data: {query: "..."})
 - "summarize_email": rezumă un email specific (action_data: {index: N} - N=1 pentru ultimul)
 - "search_internet": caută informații (action_data: {query: "..."})
+- "compare_shopping_prices": compară prețuri live pentru lista de cumpărături (action_data: {items: ["lapte", "ouă", "pâine"]} sau null pentru lista curentă)
 - "schedule_meeting": programează întâlnire cu Meet (action_data: {title: "...", date: "YYYY-MM-DD", time: "HH:MM", attendee_email: "...", attendee_name: "...", description: "...", duration_minutes: 60, reminder_hours: 1})
 - "add_calendar_event": adaugă eveniment simplu în calendar (action_data: {title: "...", date: "YYYY-MM-DD", time: "HH:MM", description: "...", duration_minutes: 60})
 - "list_calendar_events": listează evenimentele din calendar
@@ -205,9 +209,14 @@ INTENT-URI POSIBILE:
 - "general": conversație generală (fără acțiune specială)
 
 REGULI PENTRU MULTIPLE PRODUSE/TASK-URI:
-- Când utilizatorul cere să adaugi MAI MULTE produse sau task-uri deodată, folosește action_data ca ARRAY
-- Exemplu: "adaugă lapte, pâine și ouă" -> action_data: [{name: "lapte"}, {name: "pâine"}, {name: "ouă"}]
-- Exemplu: "am 3 task-uri: X, Y, Z" -> action_data: [{title: "X"}, {title: "Y"}, {title: "Z"}]
+- Când utilizatorul cere să adaugi MAI MULTE produse sau task-uri deodată, folosește mereu obiecte JSON cu cheie:
+- Produse multiple: action_data: {items: [{name: "lapte"}, {name: "pâine"}, {name: "ouă"}]}
+- Task-uri multiple: action_data: {tasks: [{title: "X"}, {title: "Y"}, {title: "Z"}]}
+- NU trimite action_data ca array direct la rădăcină
+
+REGULĂ PENTRU CUMPĂRĂTURI MULTE:
+- Dacă utilizatorul adaugă multe produse (ex. listă mare), după confirmare oferă și o sugestie scurtă de 2-3 locuri potrivite de cumpărături.
+- Dacă utilizatorul cere explicit cel mai ieftin magazin sau comparație de prețuri, setează intent="compare_shopping_prices".
 
 REGULI PENTRU CITIRE EMAIL:
 - "citește-mi emailurile" sau "ce emailuri am" -> read_emails cu count: 5
@@ -228,6 +237,7 @@ IMPORTANT:
   Future<AIResponse> chat(
     String userMessage, {
     List<Map<String, String>>? conversationHistory,
+    String? runtimeContext,
   }) async {
     if (!_isInitialized || _model == null) {
       return AIResponse.error(
@@ -237,8 +247,12 @@ IMPORTANT:
 
     try {
       final systemPrompt = _buildSystemPrompt();
+      final contextBlock =
+          (runtimeContext != null && runtimeContext.trim().isNotEmpty)
+          ? '\n\n$runtimeContext'
+          : '';
       final fullPrompt =
-          '$systemPrompt\n\nMesajul utilizatorului: $userMessage';
+          '$systemPrompt$contextBlock\n\nMesajul utilizatorului: $userMessage';
 
       // Build content with history
       List<Content> contents = [];
@@ -268,6 +282,7 @@ IMPORTANT:
     String userMessage,
     String searchContext, {
     List<Map<String, String>>? conversationHistory,
+    String? runtimeContext,
   }) async {
     if (!_isInitialized || _model == null) {
       return AIResponse.error(
@@ -277,8 +292,12 @@ IMPORTANT:
 
     try {
       final systemPrompt = _buildSystemPrompt();
+      final contextBlock =
+          (runtimeContext != null && runtimeContext.trim().isNotEmpty)
+          ? '\n\n$runtimeContext'
+          : '';
       final fullPrompt =
-          '''$systemPrompt
+          '''$systemPrompt$contextBlock
 
 Informații găsite pe internet:
 $searchContext

@@ -290,10 +290,13 @@ class LocalAssistantService {
     try {
       print('💬 Processing message: $message');
 
+      final persistentContext = await _buildPersistentContext();
+
       // Get AI response
       final aiResult = await _gemini.chat(
         message,
         conversationHistory: _conversationHistory,
+        runtimeContext: persistentContext,
       );
 
       String responseText = aiResult.response;
@@ -309,6 +312,7 @@ class LocalAssistantService {
             message,
             searchContext,
             conversationHistory: _conversationHistory,
+            runtimeContext: persistentContext,
           );
           responseText = aiWithSearch.response;
         }
@@ -328,6 +332,11 @@ class LocalAssistantService {
             aiResult.intent!,
             actionResult,
             responseText,
+          );
+        } else {
+          responseText = _buildActionFailureResponse(
+            aiResult.intent!,
+            actionResult.error,
           );
         }
       }
@@ -360,7 +369,8 @@ class LocalAssistantService {
       return ChatResponse(
         response: responseText,
         action: actionResult?.toJson(),
-        success: true,
+        success: actionResult?.success ?? true,
+        error: actionResult?.success == false ? actionResult?.error : null,
         intent: aiResult.intent,
         needsConfirmation: aiResult.needsConfirmation,
       );
@@ -411,6 +421,111 @@ class LocalAssistantService {
 
       default:
         return result.message ?? originalResponse;
+    }
+  }
+
+  /// Builds a clear failure message when an action could not be executed.
+  String _buildActionFailureResponse(String intent, String? error) {
+    final reason = (error != null && error.trim().isNotEmpty)
+        ? error.trim()
+        : 'Nu am putut determina motivul exact.';
+    final hint = _actionFailureHint(intent, reason);
+
+    final actionLabel = _actionLabel(intent);
+    return 'Nu am putut $actionLabel. Motiv: $reason${hint.isNotEmpty ? ' $hint' : ''}';
+  }
+
+  String _actionFailureHint(String intent, String reason) {
+    final lowerReason = reason.toLowerCase();
+
+    if (intent == 'send_email' ||
+        intent == 'read_emails' ||
+        intent == 'read_last_email' ||
+        intent == 'search_emails') {
+      return 'Verifică în Setări > Configurare Email dacă adresa și parola de aplicație sunt corecte.';
+    }
+
+    if (lowerReason.contains('acțiune necunoscută') ||
+        lowerReason.contains('actiune necunoscuta')) {
+      return 'Funcția nu este implementată încă în aplicație.';
+    }
+
+    if (intent == 'search_internet') {
+      return 'Verifică conexiunea la internet și încearcă din nou.';
+    }
+
+    if (intent == 'compare_shopping_prices') {
+      return 'Nu am găsit suficiente date live de preț acum. Încearcă din nou puțin mai târziu sau cu produse mai specifice.';
+    }
+
+    if (intent == 'schedule_meeting' ||
+        intent == 'add_calendar_event' ||
+        intent == 'cancel_calendar_event' ||
+        intent == 'list_calendar_events') {
+      return 'Verifică formatul datei/orei și permisiunile pentru calendar/notificări.';
+    }
+
+    return '';
+  }
+
+  String _actionLabel(String intent) {
+    switch (intent) {
+      case 'send_email':
+        return 'trimite emailul';
+      case 'read_emails':
+      case 'read_last_email':
+      case 'search_emails':
+        return 'accesa emailurile';
+      case 'add_task':
+      case 'list_tasks':
+      case 'complete_task':
+      case 'delete_task':
+        return 'executa acțiunea pe task-uri';
+      case 'add_shopping_item':
+      case 'list_shopping':
+      case 'remove_shopping_item':
+        return 'executa acțiunea pe lista de cumpărături';
+      case 'schedule_meeting':
+      case 'add_calendar_event':
+      case 'list_calendar_events':
+      case 'cancel_calendar_event':
+        return 'executa acțiunea din calendar';
+      case 'search_internet':
+        return 'face căutarea pe internet';
+      case 'compare_shopping_prices':
+        return 'compara prețurile live între magazine';
+      default:
+        return 'executa această acțiune';
+    }
+  }
+
+  /// Builds a compact, persistent snapshot so the AI always knows current lists.
+  Future<String> _buildPersistentContext() async {
+    try {
+      final tasks = await _db.getAllTasks(completed: false);
+      final shoppingItems = await _db.getAllShoppingItems(purchased: false);
+
+      final taskSummary = tasks.isEmpty
+          ? 'Nu există task-uri active.'
+          : tasks.take(12).map((t) => t.title).join(', ');
+
+      final shoppingSummary = shoppingItems.isEmpty
+          ? 'Lista de cumpărături este goală.'
+          : shoppingItems
+                .take(20)
+                .map((i) => '${i.name} (${i.quantity})')
+                .join(', ');
+
+      return '''
+CONTEXT PERSISTENT DIN APLICAȚIE (actual, din baza locală):
+- Task-uri active (${tasks.length}): $taskSummary
+- Produse de cumpărat (${shoppingItems.length}): $shoppingSummary
+
+Regulă: dacă utilizatorul întreabă ce are pe liste, folosește acest context actual fără să ceri repetarea informațiilor.
+''';
+    } catch (e) {
+      // Do not block chat if context retrieval fails.
+      return 'CONTEXT PERSISTENT indisponibil momentan: $e';
     }
   }
 
