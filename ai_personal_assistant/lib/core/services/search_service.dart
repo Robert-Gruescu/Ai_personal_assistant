@@ -1,5 +1,19 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIGURARE SERPER.DEV
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// 1. Creează cont gratuit la https://serper.dev (fără card, 2500 căutări)
+// 2. Copiază API key-ul din dashboard → API keys
+// 3. Pune-l în fișierul .env:
+//    SERPER_API_KEY=cheia_ta_aici
+//
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Search result from the internet
 class SearchResult {
@@ -48,7 +62,8 @@ class SearchResponse {
   }
 
   String formatForAI() {
-    if (!success || results.isEmpty) {
+    if (!success ||
+        (results.isEmpty && (directAnswer == null || directAnswer!.isEmpty))) {
       return 'Nu am găsit rezultate pentru: $query';
     }
 
@@ -58,19 +73,31 @@ class SearchResponse {
       buffer.writeln();
     }
 
-    buffer.writeln('Rezultate căutare pentru "$query":');
-    buffer.writeln();
-
-    for (int i = 0; i < results.length && i < 5; i++) {
-      final result = results[i];
-      buffer.writeln('${i + 1}. ${result.title}');
-      buffer.writeln('   ${result.snippet}');
-      buffer.writeln('   Link: ${result.link}');
+    if (results.isNotEmpty) {
+      buffer.writeln('Rezultate căutare pentru "$query":');
       buffer.writeln();
+      for (int i = 0; i < results.length && i < 5; i++) {
+        final result = results[i];
+        buffer.writeln('${i + 1}. ${result.title}');
+        buffer.writeln('   ${result.snippet}');
+        buffer.writeln();
+      }
     }
 
     return buffer.toString();
   }
+}
+
+class CatalogPdfInfo {
+  final String title;
+  final String link;
+  CatalogPdfInfo({required this.title, required this.link});
+}
+
+class ImageDownload {
+  final Uint8List bytes;
+  final String mimeType;
+  ImageDownload({required this.bytes, required this.mimeType});
 }
 
 class StorePriceMatch {
@@ -158,14 +185,20 @@ class ShoppingPriceComparisonResponse {
   };
 }
 
-/// Internet Search Service using DuckDuckGo
+/// Internet Search Service — motor: Serper.dev (Google Search API)
 class SearchService {
   static final SearchService _instance = SearchService._internal();
   factory SearchService() => _instance;
   SearchService._internal();
 
-  static const String _duckDuckGoInstantUrl = 'https://api.duckduckgo.com/';
-  static const String _duckDuckGoHtmlUrl = 'https://html.duckduckgo.com/html/';
+  static String get _serperApiKey => dotenv.env['SERPER_API_KEY'] ?? '';
+
+  static const String _serperUrl = 'https://google.serper.dev/search';
+
+  static const int _maxPdfBytes = 25 * 1024 * 1024;
+  static const int _maxCatalogChars = 12000;
+  static const int _maxOfferLines = 120;
+  static const int _maxFlyerPages = 2;
 
   static const List<String> _defaultStores = [
     'Lidl',
@@ -174,202 +207,215 @@ class SearchService {
     'Auchan',
   ];
 
-  /// Search the internet for information
+  final Map<String, SearchResponse> _searchCache = {};
+
+  bool get _serperConfigured =>
+      _serperApiKey.isNotEmpty && _serperApiKey != 'PUNE_SERPER_API_KEY_AICI';
+
+  // ── PUBLIC: căutare principală ───────────────────────────────────────────
+
   Future<SearchResponse> search(String query, {int numResults = 5}) async {
-    try {
-      print('🔍 Searching for: $query');
+    print('🔍 Searching for: $query');
 
-      // Try DuckDuckGo Instant Answer API first
-      final instantResult = await _searchDuckDuckGoInstant(query);
-      if (instantResult != null && instantResult.isNotEmpty) {
-        return SearchResponse(
-          success: true,
-          query: query,
-          directAnswer: instantResult,
-          results: [],
-        );
-      }
+    final cacheKey = '${query}_$numResults';
+    if (_searchCache.containsKey(cacheKey)) {
+      print('📦 Search cache hit: $query');
+      return _searchCache[cacheKey]!;
+    }
 
-      // Try scraping DuckDuckGo HTML results
-      final results = await _searchDuckDuckGoHtml(query, numResults);
-
-      if (results.isNotEmpty) {
-        return SearchResponse(success: true, query: query, results: results);
-      }
-
-      // Fallback: Try Google Custom Search if available
-      // For now, return empty results
+    if (!_serperConfigured) {
+      print('❌ Serper API key not configured');
       return SearchResponse(
         success: false,
         query: query,
         results: [],
-        error: 'Nu am putut găsi rezultate pentru această căutare.',
+        error: 'SERPER_API_KEY lipsește din fișierul .env.',
       );
-    } catch (e) {
-      print('❌ Search error: $e');
-      return SearchResponse.error(query, e.toString());
     }
-  }
 
-  /// Search using DuckDuckGo Instant Answer API
-  Future<String?> _searchDuckDuckGoInstant(String query) async {
-    try {
-      final uri = Uri.parse(_duckDuckGoInstantUrl).replace(
-        queryParameters: {
-          'q': query,
-          'format': 'json',
-          'no_redirect': '1',
-          'no_html': '1',
-        },
-      );
+    final result = await _searchSerper(query, numResults: numResults);
 
-      final response = await http
-          .get(
-            uri,
-            headers: {
-              'User-Agent':
-                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            },
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-
-        // Check for Abstract (main answer)
-        final abstract = data['Abstract'] as String?;
-        if (abstract != null && abstract.isNotEmpty) {
-          return abstract;
-        }
-
-        // Check for Answer
-        final answer = data['Answer'] as String?;
-        if (answer != null && answer.isNotEmpty) {
-          return answer;
-        }
-
-        // Check for Definition
-        final definition = data['Definition'] as String?;
-        if (definition != null && definition.isNotEmpty) {
-          return definition;
-        }
+    if (result.success && result.results.isNotEmpty) {
+      if (_searchCache.length >= 50) {
+        _searchCache.remove(_searchCache.keys.first);
       }
-
-      return null;
-    } catch (e) {
-      print('⚠️ DuckDuckGo Instant API error: $e');
-      return null;
+      _searchCache[cacheKey] = result;
     }
+
+    return result;
   }
 
-  /// Search using DuckDuckGo HTML (web scraping)
-  Future<List<SearchResult>> _searchDuckDuckGoHtml(
-    String query,
-    int numResults,
-  ) async {
+  // ── SERPER.DEV ───────────────────────────────────────────────────────────
+
+  Future<SearchResponse> _searchSerper(
+    String query, {
+    int numResults = 5,
+  }) async {
     try {
-      final uri = Uri.parse(_duckDuckGoHtmlUrl);
+      final body = jsonEncode({
+        'q': query,
+        'gl': 'ro',
+        'hl': 'ro',
+        'num': numResults.clamp(1, 10),
+      });
 
       final response = await http
           .post(
-            uri,
+            Uri.parse(_serperUrl),
             headers: {
-              'User-Agent':
-                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-API-KEY': _serperApiKey,
+              'Content-Type': 'application/json',
             },
-            body: {'q': query, 'kl': 'ro-ro'},
+            body: body,
           )
           .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
-        return _parseHtmlResults(response.body, numResults);
-      }
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
 
-      return [];
-    } catch (e) {
-      print('⚠️ DuckDuckGo HTML search error: $e');
-      return [];
-    }
-  }
+        // Answer box (răspuns direct)
+        final answerBox = data['answerBox'] as Map<String, dynamic>?;
+        String? directAnswer;
+        if (answerBox != null) {
+          directAnswer =
+              answerBox['answer'] as String? ??
+              answerBox['snippet'] as String? ??
+              answerBox['title'] as String?;
+        }
 
-  /// Parse HTML search results
-  List<SearchResult> _parseHtmlResults(String html, int maxResults) {
-    final results = <SearchResult>[];
-
-    try {
-      // Simple regex-based parsing for DuckDuckGo HTML results
-      // Pattern for result titles and snippets
-      final titlePattern = RegExp(
-        r'<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>',
-      );
-      final snippetPattern = RegExp(
-        r'<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)</a>',
-      );
-
-      final titleMatches = titlePattern.allMatches(html).toList();
-      final snippetMatches = snippetPattern.allMatches(html).toList();
-
-      final count = titleMatches.length < snippetMatches.length
-          ? titleMatches.length
-          : snippetMatches.length;
-
-      for (int i = 0; i < count && i < maxResults; i++) {
-        final titleMatch = titleMatches[i];
-        final snippetMatch = snippetMatches[i];
-
-        String url = titleMatch.group(1) ?? '';
-        String title = _cleanHtml(titleMatch.group(2) ?? '');
-        String snippet = _cleanHtml(snippetMatch.group(1) ?? '');
-
-        // Skip ad results
-        if (url.contains('duckduckgo.com') || url.isEmpty) continue;
-
-        // Decode URL
-        if (url.startsWith('//duckduckgo.com/l/?uddg=')) {
-          url = Uri.decodeFull(
-            url.replaceFirst('//duckduckgo.com/l/?uddg=', ''),
+        // Organic results
+        final organic = data['organic'] as List? ?? [];
+        if (organic.isEmpty && directAnswer == null) {
+          return SearchResponse(
+            success: false,
+            query: query,
+            results: [],
+            error: 'Niciun rezultat găsit pentru: $query',
           );
-          final ampIndex = url.indexOf('&');
-          if (ampIndex > 0) {
-            url = url.substring(0, ampIndex);
-          }
         }
 
-        if (title.isNotEmpty && url.isNotEmpty) {
-          results.add(SearchResult(title: title, snippet: snippet, link: url));
-        }
+        final results = organic.map((item) {
+          return SearchResult(
+            title: item['title'] ?? '',
+            snippet: item['snippet'] ?? '',
+            link: item['link'] ?? '',
+          );
+        }).toList();
+
+        print('✅ Serper: ${results.length} rezultate pentru "$query"');
+        return SearchResponse(
+          success: true,
+          query: query,
+          directAnswer: directAnswer,
+          results: results,
+        );
+      } else if (response.statusCode == 429) {
+        print('⚠️ Serper: limită de căutări depășită');
+        return SearchResponse(
+          success: false,
+          query: query,
+          results: [],
+          error: 'Limita de căutări Serper a fost depășită.',
+        );
+      } else {
+        print('⚠️ Serper error: ${response.statusCode} — ${response.body}');
+        return SearchResponse(
+          success: false,
+          query: query,
+          results: [],
+          error: 'Eroare Serper Search: ${response.statusCode}',
+        );
       }
     } catch (e) {
-      print('⚠️ HTML parsing error: $e');
+      print('❌ Serper Search error: $e');
+      return SearchResponse(
+        success: false,
+        query: query,
+        results: [],
+        error: e.toString(),
+      );
     }
-
-    return results;
   }
 
-  /// Clean HTML tags from string
-  String _cleanHtml(String html) {
-    return html
-        .replaceAll(RegExp(r'<[^>]*>'), '')
-        .replaceAll('&nbsp;', ' ')
-        .replaceAll('&amp;', '&')
-        .replaceAll('&lt;', '<')
-        .replaceAll('&gt;', '>')
-        .replaceAll('&quot;', '"')
-        .replaceAll('&#39;', "'")
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-  }
+  // ── METODE PUBLICE AUXILIARE ─────────────────────────────────────────────
 
-  /// Search for news articles
   Future<SearchResponse> searchNews(String query, {int numResults = 5}) async {
-    // Add "news" or "știri" to the query for news results
-    final newsQuery = '$query știri ultimele';
-    return search(newsQuery, numResults: numResults);
+    return search('$query știri ultimele', numResults: numResults);
   }
 
-  /// Compare live prices for a shopping list across stores.
-  /// Uses live web snippets, so results are estimates and depend on available indexed offers.
+  Future<Map<String, String>?> extractCatalogOffers(
+    String query,
+    List<SearchResult> results,
+  ) async {
+    final pdfInfo = await _findCatalogPdf(query, results);
+    if (pdfInfo == null) return null;
+
+    final text = await _extractPdfText(pdfInfo.link);
+    if (text == null || text.trim().isEmpty) return null;
+
+    final compact = _compactCatalogText(text);
+    if (compact.trim().isEmpty) return null;
+
+    return {
+      'catalog_title': pdfInfo.title,
+      'catalog_link': pdfInfo.link,
+      'catalog_text': compact,
+    };
+  }
+
+  Future<List<String>> findFlyerImageUrls(
+    String query,
+    List<SearchResult> results, {
+    int maxPages = _maxFlyerPages,
+  }) async {
+    final flyerUrl = _findFlyerPageUrl(results);
+    if (flyerUrl == null) return [];
+
+    final base = _extractFlyerBase(flyerUrl);
+    if (base == null) return [];
+
+    final imageUrls = <String>[];
+    for (int page = 1; page <= maxPages; page++) {
+      final imageUrl = await _extractFlyerImageUrl('$base/page/$page');
+      if (imageUrl != null && !imageUrls.contains(imageUrl)) {
+        imageUrls.add(imageUrl);
+      }
+    }
+    return imageUrls;
+  }
+
+  Future<ImageDownload?> downloadImage(String url) async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse(url),
+            headers: {
+              'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            },
+          )
+          .timeout(const Duration(seconds: 25));
+
+      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+        return null;
+      }
+
+      final contentType = response.headers['content-type'] ?? '';
+      final mimeType = contentType.split(';').first.trim();
+      final resolvedType = mimeType.isNotEmpty
+          ? mimeType
+          : _guessImageMimeType(url);
+      if (!resolvedType.startsWith('image/')) return null;
+
+      return ImageDownload(bytes: response.bodyBytes, mimeType: resolvedType);
+    } catch (e) {
+      print('⚠️ Image download error: $e');
+      return null;
+    }
+  }
+
+  // ── PRICE COMPARISON ─────────────────────────────────────────────────────
+
   Future<ShoppingPriceComparisonResponse> compareShoppingListPrices(
     List<String> items, {
     List<String>? stores,
@@ -391,71 +437,59 @@ class SearchService {
         ? _defaultStores
         : stores.map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
 
-    if (scanStores.isEmpty) {
-      return ShoppingPriceComparisonResponse.error(
-        'Nu am magazine pentru comparație.',
-      );
-    }
-
     try {
       final matches = <StorePriceMatch>[];
-
       for (final item in scanItems) {
         for (final store in scanStores) {
           final match = await _findLivePrice(item: item, store: store);
-          if (match != null) {
-            matches.add(match);
-          }
+          if (match != null) matches.add(match);
         }
       }
 
       if (matches.isEmpty) {
         return ShoppingPriceComparisonResponse.error(
-          'Nu am găsit suficiente prețuri live pentru comparație acum.',
+          'Nu am găsit suficiente prețuri live pentru comparație.',
         );
       }
 
       final summaries = <StorePriceSummary>[];
       for (final store in scanStores) {
         final storeMatches = matches.where((m) => m.store == store).toList();
-        final total = storeMatches.fold<double>(0, (sum, m) => sum + m.price);
-        final matchedCount = storeMatches.length;
-        final missingCount = scanItems.length - matchedCount;
-
-        // Penalize missing prices to avoid over-favoring stores with partial data.
-        final penalty = missingCount * 12.0;
+        final total = storeMatches.fold<double>(0, (s, m) => s + m.price);
+        final missing = scanItems.length - storeMatches.length;
         summaries.add(
           StorePriceSummary(
             store: store,
-            estimatedTotal: total + penalty,
-            matchedItems: matchedCount,
-            missingItems: missingCount,
+            estimatedTotal: total + missing * 12.0,
+            matchedItems: storeMatches.length,
+            missingItems: missing,
           ),
         );
       }
 
       summaries.sort((a, b) => a.estimatedTotal.compareTo(b.estimatedTotal));
       final best = summaries.first;
-
-      final bestMatches = matches.where((m) => m.store == best.store).toList()
-        ..sort((a, b) => a.price.compareTo(b.price));
-
-      final highlighted = bestMatches.take(3).map((m) => m.item).toList();
-      final rationale = highlighted.isNotEmpty
-          ? 'Estimarea cea mai bună este la ${best.store}. Produse avantajoase acum: ${highlighted.join(', ')}.'
-          : 'Estimarea totală cea mai bună este la ${best.store}.';
+      final highlighted = matches
+          .where((m) => m.store == best.store)
+          .map((m) => m.item)
+          .toSet()
+          .take(3)
+          .toList();
 
       return ShoppingPriceComparisonResponse(
         success: true,
         recommendedStore: best.store,
-        rationale: rationale,
+        rationale: highlighted.isNotEmpty
+            ? 'Estimarea cea mai bună este la ${best.store}. '
+                  'Produse avantajoase: ${highlighted.join(', ')}.'
+            : 'Estimarea totală cea mai bună este la ${best.store}.',
         storeSummaries: summaries,
         matchedPrices: matches,
         scannedItems: scanItems,
       );
     } catch (e) {
       return ShoppingPriceComparisonResponse.error(
-        'Eroare la compararea prețurilor live: $e',
+        'Eroare la compararea prețurilor: $e',
       );
     }
   }
@@ -464,49 +498,172 @@ class SearchService {
     required String item,
     required String store,
   }) async {
-    final query = '$item preț $store România reducere săptămâna aceasta';
-    final results = await _searchDuckDuckGoHtml(query, 5);
-
-    for (final result in results) {
-      final price = _extractPrice('${result.title} ${result.snippet}');
+    final result = await search('$item preț $store România', numResults: 5);
+    for (final r in result.results) {
+      final price = _extractPrice('${r.title} ${r.snippet}');
       if (price != null) {
         return StorePriceMatch(
           item: item,
           store: store,
           price: price,
-          sourceTitle: result.title,
-          sourceLink: result.link,
+          sourceTitle: r.title,
+          sourceLink: r.link,
         );
       }
     }
-
     return null;
   }
 
   double? _extractPrice(String text) {
     final normalized = text.toLowerCase().replaceAll(',', '.');
-
     final withCurrency = RegExp(
-      r'(\d{1,4}(?:\.\d{1,2})?)\s*(lei|ron|r\.?o\.?n\.?)',
+      r'(\d{1,4}(?:\.\d{1,2})?)\s*(lei|ron)',
       caseSensitive: false,
     );
-    final currencyMatch = withCurrency.firstMatch(normalized);
-    if (currencyMatch != null) {
-      final value = double.tryParse(currencyMatch.group(1)!);
-      if (value != null && value > 0 && value < 5000) {
-        return value;
-      }
+    final m = withCurrency.firstMatch(normalized);
+    if (m != null) {
+      final value = double.tryParse(m.group(1)!);
+      if (value != null && value > 0 && value < 5000) return value;
     }
-
-    final generic = RegExp(r'\b(\d{1,3}(?:\.\d{1,2})?)\b');
-    final genericMatches = generic.allMatches(normalized).toList();
-    for (final match in genericMatches) {
-      final value = double.tryParse(match.group(1)!);
-      if (value != null && value >= 1 && value <= 1000) {
-        return value;
-      }
-    }
-
     return null;
+  }
+
+  // ── PDF / FLYER HELPERS ──────────────────────────────────────────────────
+
+  String? _findFlyerPageUrl(List<SearchResult> results) {
+    for (final r in results) {
+      if (r.link.contains('/view/flyer/page/')) return r.link;
+    }
+    return null;
+  }
+
+  String? _extractFlyerBase(String url) {
+    final m = RegExp(r'^(https?://[^\s]+/view/flyer)/page/\d+').firstMatch(url);
+    return m?.group(1);
+  }
+
+  Future<String?> _extractFlyerImageUrl(String pageUrl) async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse(pageUrl),
+            headers: {
+              'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            },
+          )
+          .timeout(const Duration(seconds: 20));
+      if (response.statusCode != 200) return null;
+
+      for (final m in RegExp(
+        r'https?://[^\s"\)]+\.(?:png|jpg|jpeg)',
+        caseSensitive: false,
+      ).allMatches(response.body)) {
+        final url = m.group(0) ?? '';
+        if (url.contains('leaflets') || url.contains('imgproxy')) return url;
+      }
+      return null;
+    } catch (e) {
+      print('⚠️ Flyer page error: $e');
+      return null;
+    }
+  }
+
+  String _guessImageMimeType(String url) {
+    final lower = url.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    return 'image/png';
+  }
+
+  Future<CatalogPdfInfo?> _findCatalogPdf(
+    String query,
+    List<SearchResult> results,
+  ) async {
+    final candidates = <SearchResult>[...results];
+
+    final pdfSearch = await search('$query catalog pdf', numResults: 8);
+    for (final r in pdfSearch.results) {
+      if (!candidates.any((c) => c.link == r.link)) {
+        candidates.add(r);
+      }
+    }
+
+    for (final r in candidates) {
+      if (r.link.toLowerCase().contains('.pdf')) {
+        return CatalogPdfInfo(title: r.title, link: r.link);
+      }
+    }
+    return null;
+  }
+
+  Future<String?> _extractPdfText(String url) async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse(url),
+            headers: {
+              'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            },
+          )
+          .timeout(const Duration(seconds: 25));
+
+      if (response.statusCode != 200) return null;
+      final bytes = response.bodyBytes;
+      if (bytes.isEmpty || bytes.length > _maxPdfBytes) return null;
+
+      final document = PdfDocument(inputBytes: bytes);
+      final extractor = PdfTextExtractor(document);
+      final text = extractor.extractText();
+      document.dispose();
+
+      if (text.trim().length < 200) return null;
+      return text;
+    } catch (e) {
+      print('⚠️ PDF extraction error: $e');
+      return null;
+    }
+  }
+
+  String _compactCatalogText(String text) {
+    final lines = text
+        .replaceAll('\r', '')
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+
+    final pricePattern = RegExp(
+      r'(\d{1,4}(?:[.,]\d{1,2})?)\s*(lei|ron)',
+      caseSensitive: false,
+    );
+
+    final extracted = <String>[];
+    final seen = <String>{};
+
+    for (int i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (pricePattern.hasMatch(line)) {
+        if (i > 0 && !pricePattern.hasMatch(lines[i - 1])) {
+          if (seen.add(lines[i - 1])) extracted.add(lines[i - 1]);
+        }
+        if (seen.add(line)) extracted.add(line);
+      }
+      if (extracted.length >= _maxOfferLines) break;
+    }
+
+    final result = extracted.isEmpty
+        ? lines.take(_maxOfferLines).join('\n')
+        : extracted.join('\n');
+
+    return result.length <= _maxCatalogChars
+        ? result
+        : result.substring(0, _maxCatalogChars);
+  }
+
+  /// Șterge cache-ul de căutări
+  void clearSearchCache() {
+    _searchCache.clear();
   }
 }

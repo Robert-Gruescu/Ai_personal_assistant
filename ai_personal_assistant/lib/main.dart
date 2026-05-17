@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'screens/home_screen_local.dart';
 import 'core/services/database_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Încarcă variabilele de mediu din .env
+  await dotenv.load(fileName: '.env');
 
   // Inițializare locale pentru date formatting
   await initializeDateFormatting('ro_RO', null);

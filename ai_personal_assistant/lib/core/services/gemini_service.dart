@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:intl/intl.dart';
 
@@ -46,6 +47,13 @@ class AIResponse {
   bool get needsSearch => searchQuery != null && searchQuery!.isNotEmpty;
 }
 
+class GeminiImage {
+  final Uint8List bytes;
+  final String mimeType;
+
+  GeminiImage({required this.bytes, required this.mimeType});
+}
+
 /// Google Gemini AI Service
 class GeminiService {
   static final GeminiService _instance = GeminiService._internal();
@@ -62,7 +70,6 @@ class GeminiService {
     'gemini-1.5-pro',
   ];
 
-  /// Initialize the Gemini service with API key
   Future<bool> initialize(String apiKey) async {
     if (apiKey.isEmpty) {
       print('⚠️ Gemini API key not provided');
@@ -92,10 +99,8 @@ class GeminiService {
 
   bool get isInitialized => _isInitialized;
 
-  // Context utilizator (email configurat, etc.)
   String? _userEmail;
 
-  /// Setează email-ul utilizatorului pentru context
   void setUserEmail(String? email) {
     _userEmail = email;
     print('📧 User email set: ${email ?? "not configured"}');
@@ -105,7 +110,6 @@ class GeminiService {
     final currentDate = DateFormat('dd MMMM yyyy', 'ro').format(DateTime.now());
     final currentTime = DateFormat('HH:mm').format(DateTime.now());
 
-    // Adaugă informații despre email-ul configurat
     String emailContext = '';
     if (_userEmail != null && _userEmail!.isNotEmpty) {
       emailContext =
@@ -146,6 +150,7 @@ CAPABILITĂȚI:
 7. CĂUTARE: Poți căuta pe internet informații actuale
 8. CALENDAR: Poți adăuga evenimente în Google Calendar
 9. ÎNTÂLNIRI: Poți programa întâlniri cu Google Meet, trimite invitații și reminder-uri prin email
+10. REDUCERI: Poți căuta reduceri și oferte de la supermarketuri din România
 
 REGULI PENTRU PROGRAMARE ÎNTÂLNIRI:
 - Când utilizatorul vrea să programeze o întâlnire/meeting, extrage: titlu, dată, oră, email invitat, nume invitat
@@ -164,6 +169,32 @@ REGULI IMPORTANTE PENTRU ACȚIUNI:
 - Pune întrebări de follow-up naturale ("Mai ai nevoie de altceva?")
 - Când ai nevoie de informații actuale (vreme, știri, prețuri), caută pe internet
 
+REGULĂ CRITICĂ — DIFERENȚA DINTRE get_discounts ȘI search_internet:
+Aceasta este cea mai importantă regulă pentru alegerea corectă a intent-ului:
+
+→ Folosește "get_discounts" DOAR când utilizatorul vrea să VADĂ LISTA GENERALĂ DE REDUCERI/OFERTE a unui magazin:
+   • "ce reduceri sunt la Lidl?"
+   • "arată-mi ofertele de la Kaufland săptămâna asta"
+   • "ce e la reducere acum?"
+   • "ofertele Carrefour"
+   • "ce promoții are Penny?"
+
+→ Folosește "search_internet" când utilizatorul întreabă PREȚUL unui PRODUS SPECIFIC, chiar dacă menționează un magazin:
+   • "cât costă o doză de Coca-Cola la Lidl?" → search_internet, query: "pret doza Coca Cola Lidl Romania"
+   • "ce preț are laptele la Kaufland?" → search_internet, query: "pret lapte Kaufland Romania"
+   • "cât costă benzina azi?" → search_internet
+   • "prețul iPhone 15 la eMAG?" → search_internet
+   • "cât face pâinea la Mega Image?" → search_internet
+
+REGULA SIMPLĂ: Dacă întrebarea conține un PRODUS SPECIFIC + cuvinte ca "costă", "preț", "face", "este" → search_internet.
+              Dacă întrebarea e generală despre reduceri/oferte/promoții → get_discounts.
+
+REGULI PENTRU get_discounts:
+- Dacă menționează un magazin specific, pune-l în stores: ["Magazin"]
+- Dacă nu menționează magazine, lasă stores: null pentru a căuta la toate
+- Dacă utilizatorul spune "actualizează", "caută din nou", "date noi", adaugă force_refresh: true în action_data
+- Rezultatele includ automat produsele din lista de cumpărături marcate prioritar
+
 EXEMPLE ACȚIUNE IMEDIATĂ (needs_confirmation: false):
 - "adaugă lapte pe lista de cumpărături" -> EXECUTĂ, confirmă
 - "pune 2 kg mere pe listă" -> EXECUTĂ, confirmă
@@ -171,6 +202,9 @@ EXEMPLE ACȚIUNE IMEDIATĂ (needs_confirmation: false):
 - "șterge laptele de pe listă" -> EXECUTĂ, confirmă
 - "programează o întâlnire cu Ion mâine la 14:00" -> EXECUTĂ, confirmă
 - "fă un meet cu ana@email.com poimâine la 10" -> EXECUTĂ, confirmă
+- "ce reduceri sunt la Lidl?" -> get_discounts, stores: ["Lidl"]
+- "arată ofertele Kaufland" -> get_discounts, stores: ["Kaufland"]
+- "cât costă Coca-Cola la Lidl?" -> search_internet, query: "pret Coca Cola doza Lidl Romania"
 
 EXEMPLE CU CONFIRMARE (needs_confirmation: true):
 - "am nevoie de lapte" (menționare, nu comandă) -> întreabă dacă vrea să adaugi
@@ -196,12 +230,13 @@ INTENT-URI POSIBILE:
 - "list_shopping": listează cumpărături
 - "remove_shopping_item": șterge de pe listă (action_data: {item_id: N} sau {item_name: "..."})
 - "send_email": trimite email (action_data: {to: "...", subject: "...", body: "..."})
-- "read_emails": citește emailurile recente din inbox (action_data: {count: 5}) - implicit 5 emailuri
+- "read_emails": citește emailurile recente din inbox (action_data: {count: 5})
 - "read_last_email": citește ultimul email primit (action_data: null)
 - "search_emails": caută emailuri după subiect sau expeditor (action_data: {query: "..."})
 - "summarize_email": rezumă un email specific (action_data: {index: N} - N=1 pentru ultimul)
-- "search_internet": caută informații (action_data: {query: "..."})
+- "search_internet": caută informații sau prețuri specifice (action_data: {query: "..."})
 - "compare_shopping_prices": compară prețuri live pentru lista de cumpărături (action_data: {items: ["lapte", "ouă", "pâine"]} sau null pentru lista curentă)
+- "get_discounts": caută reduceri GENERALE de la supermarketuri .ro (action_data: {"stores": ["Lidl","Kaufland"]} sau null pentru toate; adaugă "force_refresh": true dacă utilizatorul cere date noi)
 - "schedule_meeting": programează întâlnire cu Meet (action_data: {title: "...", date: "YYYY-MM-DD", time: "HH:MM", attendee_email: "...", attendee_name: "...", description: "...", duration_minutes: 60, reminder_hours: 1})
 - "add_calendar_event": adaugă eveniment simplu în calendar (action_data: {title: "...", date: "YYYY-MM-DD", time: "HH:MM", description: "...", duration_minutes: 60})
 - "list_calendar_events": listează evenimentele din calendar
@@ -230,10 +265,10 @@ IMPORTANT:
 - Pentru comenzi explicite de adăugare/ștergere, ÎNTOTDEAUNA setează needs_confirmation: false și include action_data complet!
 - Pentru întâlniri, extrage data în format YYYY-MM-DD și ora în format HH:MM
 - Dacă utilizatorul spune "mâine", "poimâine", calculează data corectă bazată pe data curentă: $currentDate
+- Răspunde ÎNTOTDEAUNA DOAR cu JSON valid, fără text în afara JSON-ului!
 ''';
   }
 
-  /// Process a user message and generate AI response
   Future<AIResponse> chat(
     String userMessage, {
     List<Map<String, String>>? conversationHistory,
@@ -254,7 +289,6 @@ IMPORTANT:
       final fullPrompt =
           '$systemPrompt$contextBlock\n\nMesajul utilizatorului: $userMessage';
 
-      // Build content with history
       List<Content> contents = [];
 
       if (conversationHistory != null && conversationHistory.isNotEmpty) {
@@ -266,7 +300,6 @@ IMPORTANT:
 
       contents.add(Content.text(fullPrompt));
 
-      // Generate response
       final response = await _model!.generateContent(contents);
       final responseText = response.text ?? '';
 
@@ -277,7 +310,9 @@ IMPORTANT:
     }
   }
 
-  /// Process user message with additional search context
+  /// Process user message with additional search context.
+  /// IMPORTANT: acest apel trebuie să returneze text simplu, NU JSON,
+  /// deoarece e folosit pentru a formula răspunsul final după căutare.
   Future<AIResponse> chatWithSearchContext(
     String userMessage,
     String searchContext, {
@@ -291,36 +326,85 @@ IMPORTANT:
     }
 
     try {
-      final systemPrompt = _buildSystemPrompt();
+      final currentDate = DateFormat(
+        'dd MMMM yyyy',
+        'ro',
+      ).format(DateTime.now());
+      final currentTime = DateFormat('HH:mm').format(DateTime.now());
+
+      // Prompt simplificat pentru search context — cere text simplu, NU JSON
       final contextBlock =
           (runtimeContext != null && runtimeContext.trim().isNotEmpty)
           ? '\n\n$runtimeContext'
           : '';
+
       final fullPrompt =
-          '''$systemPrompt$contextBlock
+          '''Ești ASIS, un asistent vocal în română. Data: $currentDate, ora: $currentTime.$contextBlock
 
 Informații găsite pe internet:
 $searchContext
 
-Mesajul utilizatorului: $userMessage
+Întrebarea utilizatorului: $userMessage
 
-Răspunde la întrebarea utilizatorului folosind informațiile de mai sus.''';
+Răspunde DIRECT la întrebare în 1-3 propoziții, natural, ca și cum ai vorbi cu cineva.
+NU folosi JSON. NU folosi formate speciale. Scrie doar textul răspunsului.
+Dacă nu găsești informația exactă în datele de mai sus, spune că nu ai găsit un preț exact și sugerează să verifice direct pe site-ul magazinului.''';
 
       final response = await _model!.generateContent([
         Content.text(fullPrompt),
       ]);
       final responseText = response.text ?? '';
 
-      return _parseResponse(responseText);
+      // Returnează ca AIResponse cu intent general — textul e deja curat
+      return AIResponse(response: responseText.trim(), intent: 'general');
     } catch (e) {
       print('❌ Gemini chat with search error: $e');
       return AIResponse.error(e.toString());
     }
   }
 
+  Future<String> summarizeOffersFromImages(
+    String userMessage,
+    List<GeminiImage> images, {
+    String? sourceTitle,
+  }) async {
+    if (!_isInitialized || _model == null) {
+      return 'Serviciul AI nu este configurat. Verifica cheia API Gemini.';
+    }
+
+    if (images.isEmpty) {
+      return 'Nu am putut citi ofertele din imagini.';
+    }
+
+    try {
+      final titleLine = (sourceTitle != null && sourceTitle.trim().isNotEmpty)
+          ? 'Source: ${sourceTitle.trim()}'
+          : '';
+      final prompt = [
+        'User request: $userMessage',
+        if (titleLine.isNotEmpty) titleLine,
+        'Extract product offers from the catalog images.',
+        'Return a concise list with product name and price.',
+        'Respond in Romanian.',
+        'If offers cannot be read, respond exactly: "Nu am putut citi ofertele din imagini."',
+      ].join('\n');
+
+      final parts = <Part>[TextPart(prompt)];
+      for (final image in images) {
+        parts.add(DataPart(image.mimeType, image.bytes));
+      }
+
+      final response = await _model!.generateContent([Content.multi(parts)]);
+
+      return response.text ?? '';
+    } catch (e) {
+      print('❌ Gemini image summary error: $e');
+      return 'Nu am putut citi ofertele din imagini.';
+    }
+  }
+
   AIResponse _parseResponse(String responseText) {
     try {
-      // Clean up the response - remove markdown code blocks if present
       String cleanedResponse = responseText.trim();
 
       if (cleanedResponse.startsWith('```json')) {
@@ -338,7 +422,6 @@ Răspunde la întrebarea utilizatorului folosind informațiile de mai sus.''';
 
       cleanedResponse = cleanedResponse.trim();
 
-      // Try to find JSON in the response
       final jsonMatch = RegExp(r'\{[\s\S]*\}').firstMatch(cleanedResponse);
       if (jsonMatch != null) {
         final jsonStr = jsonMatch.group(0)!;
@@ -346,7 +429,6 @@ Răspunde la întrebarea utilizatorului folosind informațiile de mai sus.''';
         return AIResponse.fromJson(json);
       }
 
-      // If no JSON found, treat the whole response as a general response
       return AIResponse(
         response: cleanedResponse.isNotEmpty
             ? cleanedResponse
@@ -357,7 +439,6 @@ Răspunde la întrebarea utilizatorului folosind informațiile de mai sus.''';
       print('⚠️ Failed to parse AI response: $e');
       print('Raw response: $responseText');
 
-      // Try to extract just the response text
       final responseMatch = RegExp(
         r'"response"\s*:\s*"([^"]*)"',
       ).firstMatch(responseText);
@@ -377,8 +458,41 @@ Răspunde la întrebarea utilizatorului folosind informațiile de mai sus.''';
     }
   }
 
-  /// Reset the chat session (no-op for stateless chat)
   void resetChat() {
     // Stateless chat - no session to reset
+  }
+
+  /// Extrage informațiile relevante dintr-o pagină web față de o întrebare
+  Future<String?> extractRelevantInfo({
+    required String pageText,
+    required String question,
+    String? sourceUrl,
+  }) async {
+    if (!_isInitialized || _model == null) return null;
+
+    try {
+      final prompt =
+          '''Ai primit textul unei pagini web și o întrebare.
+Extrage DOAR informațiile relevante pentru întrebare din textul paginii.
+Fii concis — maxim 3-5 propoziții.
+Dacă nu există informații relevante, răspunde exact: "NERELEVANT"
+${sourceUrl != null ? 'Sursa: $sourceUrl' : ''}
+
+ÎNTREBARE: $question
+
+TEXT PAGINĂ:
+$pageText
+
+Răspunde direct cu informațiile relevante, fără introducere:''';
+
+      final response = await _model!.generateContent([Content.text(prompt)]);
+      final text = response.text?.trim() ?? '';
+
+      if (text == 'NERELEVANT' || text.isEmpty) return null;
+      return text;
+    } catch (e) {
+      print('❌ extractRelevantInfo error: $e');
+      return null;
+    }
   }
 }

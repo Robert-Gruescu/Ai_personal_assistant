@@ -1,3 +1,4 @@
+import 'dart:convert';
 import '../core/services/services.dart';
 import '../core/models/models.dart';
 
@@ -170,13 +171,9 @@ class LocalAssistantService {
     try {
       print('🚀 Initializing Local Assistant Service...');
 
-      // Initialize config
       await _config.initialize();
-
-      // Initialize database
       await _db.initialize();
 
-      // Get Gemini API key and initialize
       final apiKey = await _config.geminiApiKey;
       if (apiKey != null && apiKey.isNotEmpty) {
         await _gemini.initialize(apiKey);
@@ -184,7 +181,6 @@ class LocalAssistantService {
         print('⚠️ Gemini API key not configured');
       }
 
-      // Initialize TTS
       final language = await _config.speechLanguage;
       final ttsRate = await _config.ttsRate;
       final ttsVolume = await _config.ttsVolume;
@@ -194,16 +190,10 @@ class LocalAssistantService {
         volume: ttsVolume,
       );
 
-      // Initialize STT
       await _stt.initialize(language: language);
-
-      // Initialize notification service
       await _notification.initialize();
-
-      // Initialize device calendar service
       await _deviceCalendar.initialize();
 
-      // Initialize email service
       final emailConfig = await _config.getEmailConfig();
       if (emailConfig['smtp_user'] != null &&
           emailConfig['smtp_password'] != null) {
@@ -215,8 +205,6 @@ class LocalAssistantService {
           imapHost: emailConfig['imap_host'],
           imapPort: emailConfig['imap_port'],
         );
-
-        // Transmite email-ul configurat către Gemini pentru context
         _gemini.setUserEmail(emailConfig['smtp_user']);
       } else {
         _gemini.setUserEmail(null);
@@ -231,24 +219,17 @@ class LocalAssistantService {
     }
   }
 
-  /// Configure the Gemini API key
   Future<bool> configureApiKey(String apiKey) async {
     await _config.setGeminiApiKey(apiKey);
     return await _gemini.initialize(apiKey);
   }
 
-  /// Reîncarcă configurația email-ului (după ce utilizatorul o modifică)
   Future<void> reloadEmailConfig() async {
     print('📧 Reloading email configuration...');
     final emailConfig = await _config.getEmailConfig();
 
     final smtpUser = emailConfig['smtp_user'];
     final smtpPassword = emailConfig['smtp_password'];
-
-    print('📧 SMTP User: $smtpUser');
-    print(
-      '📧 Password exists: ${smtpPassword != null && smtpPassword.toString().isNotEmpty}',
-    );
 
     if (smtpUser != null &&
         smtpUser.toString().isNotEmpty &&
@@ -262,8 +243,6 @@ class LocalAssistantService {
         imapHost: emailConfig['imap_host'],
         imapPort: emailConfig['imap_port'],
       );
-
-      // Transmite email-ul configurat către Gemini pentru context
       _gemini.setUserEmail(smtpUser);
       print('✅ Email configuration reloaded: $smtpUser');
     } else {
@@ -301,9 +280,22 @@ class LocalAssistantService {
 
       String responseText = aiResult.response;
       ActionResult? actionResult;
+      Map<String, dynamic>? resolvedActionData = aiResult.actionData == null
+          ? null
+          : Map<String, dynamic>.from(aiResult.actionData!);
 
-      // Handle search intent
-      if (aiResult.needsSearch) {
+      if (aiResult.intent == 'search_internet') {
+        final query = resolvedActionData?['query'] as String?;
+        if ((query == null || query.trim().isEmpty) &&
+            aiResult.searchQuery != null &&
+            aiResult.searchQuery!.trim().isNotEmpty) {
+          resolvedActionData = resolvedActionData ?? {};
+          resolvedActionData['query'] = aiResult.searchQuery!.trim();
+        }
+      }
+
+      // Handle search intent fără action dedicat
+      if (aiResult.needsSearch && aiResult.intent != 'search_internet') {
         print('🔍 Searching for: ${aiResult.searchQuery}');
         final searchResult = await _search.search(aiResult.searchQuery!);
         if (searchResult.success) {
@@ -314,7 +306,7 @@ class LocalAssistantService {
             conversationHistory: _conversationHistory,
             runtimeContext: persistentContext,
           );
-          responseText = aiWithSearch.response;
+          responseText = _extractCleanResponse(aiWithSearch.response);
         }
       }
 
@@ -323,16 +315,23 @@ class LocalAssistantService {
         print('🚀 Executing action: ${aiResult.intent}');
         actionResult = await _executor.execute(
           aiResult.intent!,
-          aiResult.actionData,
+          resolvedActionData,
         );
 
-        // Update response based on action result
         if (actionResult.success) {
-          responseText = _updateResponseWithActionResult(
-            aiResult.intent!,
-            actionResult,
-            responseText,
-          );
+          if (aiResult.intent == 'search_internet') {
+            responseText = await _buildSearchResponse(
+              message: message,
+              actionResult: actionResult,
+              persistentContext: persistentContext,
+            );
+          } else {
+            responseText = _updateResponseWithActionResult(
+              aiResult.intent!,
+              actionResult,
+              responseText,
+            );
+          }
         } else {
           responseText = _buildActionFailureResponse(
             aiResult.intent!,
@@ -384,6 +383,137 @@ class LocalAssistantService {
     }
   }
 
+  /// Construiește răspunsul pentru search_internet folosind toate sursele disponibile:
+  /// page_content (conținut complet pagini), formatted (snippets), catalog_text (PDF)
+  Future<String> _buildSearchResponse({
+    required String message,
+    required ActionResult actionResult,
+    required String persistentContext,
+  }) async {
+    final data = actionResult.data ?? {};
+
+    final formatted = data['formatted']?.toString() ?? '';
+    final pageContent = data['page_content']?.toString() ?? '';
+    final catalogText = data['catalog_text']?.toString() ?? '';
+    final catalogTitle = data['catalog_title']?.toString() ?? '';
+    final catalogImages = (data['catalog_images'] as List? ?? [])
+        .map((e) => e.toString())
+        .where((e) => e.trim().isNotEmpty)
+        .toList();
+
+    // Construiește contextul complet din toate sursele disponibile
+    final contextParts = <String>[];
+
+    if (formatted.trim().isNotEmpty) {
+      contextParts.add(formatted.trim());
+    }
+
+    if (pageContent.trim().isNotEmpty) {
+      contextParts.add(
+        'Conținut detaliat din pagini web:\n${pageContent.trim()}',
+      );
+    }
+
+    if (catalogText.trim().isNotEmpty) {
+      final catalogContext = catalogTitle.trim().isNotEmpty
+          ? 'Catalog: $catalogTitle\n\n$catalogText'
+          : catalogText;
+      contextParts.add(catalogContext);
+    }
+
+    // Dacă avem context text — trimite la Gemini
+    if (contextParts.isNotEmpty) {
+      final fullContext = contextParts.join('\n\n---\n\n');
+      final aiWithSearch = await _gemini.chatWithSearchContext(
+        '$message\n\nInstructions: folosește DOAR informațiile de mai sus '
+        'pentru a răspunde. Nu include linkuri. Răspunde în română, '
+        'concis și natural. Dacă nu găsești informația exactă, spune '
+        'că nu ai găsit-o și sugerează să verifice direct pe site.',
+        fullContext,
+        conversationHistory: _conversationHistory,
+        runtimeContext: persistentContext,
+      );
+      return _stripLinks(_extractCleanResponse(aiWithSearch.response));
+    }
+
+    // Fallback: imagini din flyer/catalog
+    if (catalogImages.isNotEmpty) {
+      final images = <GeminiImage>[];
+      for (final url in catalogImages.take(2)) {
+        final download = await _search.downloadImage(url);
+        if (download != null) {
+          images.add(
+            GeminiImage(bytes: download.bytes, mimeType: download.mimeType),
+          );
+        }
+      }
+
+      if (images.isNotEmpty) {
+        final summary = await _gemini.summarizeOffersFromImages(
+          message,
+          images,
+          sourceTitle: catalogTitle,
+        );
+        return _stripLinks(summary);
+      }
+    }
+
+    // Fallback final: răspuns generic din date Serper
+    return _updateResponseWithActionResult(
+      'search_internet',
+      actionResult,
+      'Nu am găsit informații relevante.',
+    );
+  }
+
+  /// Extrage textul curat dintr-un răspuns AI.
+  /// Dacă răspunsul e deja text simplu, îl returnează ca atare.
+  /// Dacă e JSON, extrage câmpul "response".
+  String _extractCleanResponse(String raw) {
+    if (raw.trim().isEmpty) return raw;
+
+    final trimmed = raw.trim();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('```')) {
+      return trimmed;
+    }
+
+    try {
+      String cleaned = trimmed;
+      if (cleaned.startsWith('```json')) {
+        cleaned = cleaned.substring(7);
+      } else if (cleaned.startsWith('```')) {
+        cleaned = cleaned.substring(3);
+      }
+      if (cleaned.endsWith('```')) {
+        cleaned = cleaned.substring(0, cleaned.length - 3);
+      }
+      cleaned = cleaned.trim();
+
+      final jsonMatch = RegExp(r'\{[\s\S]*\}').firstMatch(cleaned);
+      if (jsonMatch != null) {
+        final json = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
+        final response = json['response'] as String?;
+        if (response != null && response.trim().isNotEmpty) {
+          return response.trim();
+        }
+      }
+    } catch (_) {}
+
+    final match = RegExp(
+      r'"response"\s*:\s*"((?:[^"\\]|\\.)*)"',
+    ).firstMatch(raw);
+    if (match != null) {
+      return match
+          .group(1)!
+          .replaceAll(r'\n', '\n')
+          .replaceAll(r'\t', '\t')
+          .replaceAll(r'\"', '"')
+          .trim();
+    }
+
+    return raw.trim();
+  }
+
   /// Update response text based on action result
   String _updateResponseWithActionResult(
     String intent,
@@ -397,40 +527,61 @@ class LocalAssistantService {
     switch (intent) {
       case 'list_shopping':
         final items = data['items'] as List? ?? [];
-        if (items.isEmpty) {
-          return 'Lista ta de cumpărături este goală.';
-        }
+        if (items.isEmpty) return 'Lista ta de cumpărături este goală.';
         final itemNames = items.map((i) => i['name']).join(', ');
         return 'Pe lista ta de cumpărături ai: $itemNames.';
 
       case 'list_tasks':
         final tasks = data['tasks'] as List? ?? [];
-        if (tasks.isEmpty) {
-          return 'Nu ai niciun task activ.';
-        }
+        if (tasks.isEmpty) return 'Nu ai niciun task activ.';
         final taskTitles = tasks.map((t) => t['title']).join(', ');
         return 'Ai următoarele task-uri: $taskTitles.';
 
       case 'list_calendar_events':
         final events = data['events'] as List? ?? [];
-        if (events.isEmpty) {
-          return 'Nu ai evenimente programate.';
-        }
+        if (events.isEmpty) return 'Nu ai evenimente programate.';
         final eventTitles = events.map((e) => e['title']).join(', ');
         return 'Ai următoarele evenimente: $eventTitles.';
+
+      case 'search_internet':
+        final directAnswer = data['direct_answer'] as String?;
+        final results = data['results'] as List? ?? [];
+        if ((directAnswer == null || directAnswer.trim().isEmpty) &&
+            results.isEmpty) {
+          return 'Nu am găsit rezultate pentru această căutare.';
+        }
+
+        final buffer = StringBuffer();
+        if (directAnswer != null && directAnswer.trim().isNotEmpty) {
+          buffer.writeln('Răspuns direct: ${directAnswer.trim()}');
+          if (results.isNotEmpty) buffer.writeln();
+        }
+
+        if (results.isNotEmpty) {
+          buffer.writeln('Rezultate:');
+          final maxResults = results.length < 3 ? results.length : 3;
+          for (int i = 0; i < maxResults; i++) {
+            final r = results[i] as Map? ?? {};
+            final title = r['title']?.toString() ?? '';
+            final snippet = r['snippet']?.toString() ?? '';
+            if (title.isNotEmpty) buffer.writeln('${i + 1}. $title');
+            if (snippet.isNotEmpty) buffer.writeln('   $snippet');
+            if (i < maxResults - 1) buffer.writeln();
+          }
+        }
+
+        return buffer.toString().trim();
 
       default:
         return result.message ?? originalResponse;
     }
   }
 
-  /// Builds a clear failure message when an action could not be executed.
   String _buildActionFailureResponse(String intent, String? error) {
     final reason = (error != null && error.trim().isNotEmpty)
         ? error.trim()
         : 'Nu am putut determina motivul exact.';
     final hint = _actionFailureHint(intent, reason);
-
     final actionLabel = _actionLabel(intent);
     return 'Nu am putut $actionLabel. Motiv: $reason${hint.isNotEmpty ? ' $hint' : ''}';
   }
@@ -468,6 +619,21 @@ class LocalAssistantService {
     return '';
   }
 
+  String _stripLinks(String text) {
+    final withoutUrls = text.replaceAll(
+      RegExp(r'(https?://\S+|www\.\S+)', caseSensitive: false),
+      '',
+    );
+    final withoutLinkLabels = withoutUrls.replaceAll(
+      RegExp(r'\bLink\s*:\s*', caseSensitive: false),
+      '',
+    );
+    return withoutLinkLabels
+        .replaceAll(RegExp(r'[ \t]+'), ' ')
+        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+        .trim();
+  }
+
   String _actionLabel(String intent) {
     switch (intent) {
       case 'send_email':
@@ -494,12 +660,13 @@ class LocalAssistantService {
         return 'face căutarea pe internet';
       case 'compare_shopping_prices':
         return 'compara prețurile live între magazine';
+      case 'get_discounts':
+        return 'căuta reducerile';
       default:
         return 'executa această acțiune';
     }
   }
 
-  /// Builds a compact, persistent snapshot so the AI always knows current lists.
   Future<String> _buildPersistentContext() async {
     try {
       final tasks = await _db.getAllTasks(completed: false);
@@ -524,40 +691,30 @@ CONTEXT PERSISTENT DIN APLICAȚIE (actual, din baza locală):
 Regulă: dacă utilizatorul întreabă ce are pe liste, folosește acest context actual fără să ceri repetarea informațiilor.
 ''';
     } catch (e) {
-      // Do not block chat if context retrieval fails.
       return 'CONTEXT PERSISTENT indisponibil momentan: $e';
     }
   }
 
-  /// Start speech-to-text
   Future<bool> startListening() async {
-    if (!_isInitialized) {
-      await initialize();
-    }
+    if (!_isInitialized) await initialize();
     return await _stt.startListening();
   }
 
-  /// Stop speech-to-text and get result
   Future<String?> stopListening() async {
     await _stt.stopListening();
     final result = _stt.getResult();
     return result.success ? result.text : null;
   }
 
-  /// Speak text using TTS
   Future<void> speak(String text) async {
-    if (!_isInitialized) {
-      await initialize();
-    }
+    if (!_isInitialized) await initialize();
     await _tts.speak(text);
   }
 
-  /// Stop TTS
   Future<void> stopSpeaking() async {
     await _tts.stop();
   }
 
-  /// Get all tasks
   Future<List<TaskItem>> getTasks({bool? completed}) async {
     final tasks = await _db.getAllTasks(completed: completed);
     return tasks
@@ -575,7 +732,6 @@ Regulă: dacă utilizatorul întreabă ce are pe liste, folosește acest context
         .toList();
   }
 
-  /// Get shopping list
   Future<ShoppingList> getShoppingList({bool? purchased}) async {
     final items = await _db.getAllShoppingItems(purchased: purchased);
     final total = await _db.getShoppingListTotal();
@@ -599,7 +755,6 @@ Regulă: dacă utilizatorul întreabă ce are pe liste, folosește acest context
     );
   }
 
-  /// Create new conversation
   Future<String> createConversation({String? title}) async {
     final conversation = await _db.createConversation(title: title);
     _currentConversationId = conversation.id;
@@ -607,7 +762,6 @@ Regulă: dacă utilizatorul întreabă ce are pe liste, folosește acest context
     return conversation.id;
   }
 
-  /// Switch to existing conversation
   Future<void> switchConversation(String conversationId) async {
     _currentConversationId = conversationId;
     final conversation = await _db.getConversation(conversationId);
@@ -618,22 +772,18 @@ Regulă: dacă utilizatorul întreabă ce are pe liste, folosește acest context
     }
   }
 
-  /// Get all conversations
   Future<List<Conversation>> getConversations() async {
     return await _db.getAllConversations();
   }
 
-  /// Check if service is ready
   Future<bool> checkHealth() async {
     return _isInitialized && _gemini.isInitialized;
   }
 
-  /// Clear conversation history
   void clearHistory() {
     _conversationHistory.clear();
   }
 
-  /// Dispose resources
   void dispose() {
     _stt.dispose();
     _tts.dispose();

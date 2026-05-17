@@ -5,6 +5,8 @@ import '../services/notification_service.dart';
 import '../services/device_calendar_service.dart';
 import '../models/models.dart';
 import 'package:intl/intl.dart';
+import '../services/discount_service.dart';
+import '../services/web_reader_service.dart';
 
 /// Action result from executing an action
 class ActionResult {
@@ -40,6 +42,8 @@ class ActionExecutor {
   final SearchService _search = SearchService();
   final NotificationService _notification = NotificationService();
   final DeviceCalendarService _deviceCalendar = DeviceCalendarService();
+  final DiscountService _discounts = DiscountService();
+  final WebReaderService _webReader = WebReaderService();
 
   /// Execute an action based on detected intent
   Future<ActionResult> execute(
@@ -66,6 +70,7 @@ class ActionExecutor {
       'add_calendar_event': _addCalendarEvent,
       'list_calendar_events': _listCalendarEvents,
       'cancel_calendar_event': _cancelCalendarEvent,
+      'get_discounts': _getDiscounts,
     };
 
     final handler = handlers[intent];
@@ -466,30 +471,59 @@ class ActionExecutor {
 
       final result = await _search.search(query);
 
-      if (result.success) {
-        return ActionResult.success(
-          'Am găsit informații despre "$query".',
-          data: {
-            'query': query,
-            'direct_answer': result.directAnswer,
-            'results': result.results
-                .map(
-                  (r) => {
-                    'title': r.title,
-                    'snippet': r.snippet,
-                    'link': r.link,
-                  },
-                )
-                .toList(),
-            'formatted': result.formatForAI(),
-          },
-        );
-      } else {
+      if (!result.success) {
         return ActionResult.error(result.error ?? 'Eroare la căutare.');
       }
+
+      // Citește conținutul paginilor pentru context mai detaliat
+      final urls = result.results.map((r) => r.link).toList();
+      final pageContext = await _webReader.readTopResultsForQuestion(
+        urls: urls,
+        question: query,
+        maxPages: 2,
+      );
+
+      // Caută PDF/flyer DOAR dacă e o căutare de catalog/oferte
+      final isDiscountQuery = _isCatalogQuery(query);
+      Map<String, String>? catalogData;
+      List<String> flyerImages = [];
+
+      if (isDiscountQuery) {
+        catalogData = await _search.extractCatalogOffers(query, result.results);
+        flyerImages = await _search.findFlyerImageUrls(query, result.results);
+      }
+
+      return ActionResult.success(
+        'Am găsit informații despre "$query".',
+        data: {
+          'query': query,
+          'direct_answer': result.directAnswer,
+          'results': result.results
+              .map(
+                (r) => {'title': r.title, 'snippet': r.snippet, 'link': r.link},
+              )
+              .toList(),
+          'formatted': result.formatForAI(),
+          if (pageContext.isNotEmpty) 'page_content': pageContext,
+          if (catalogData != null) ...catalogData,
+          if (flyerImages.isNotEmpty) 'catalog_images': flyerImages,
+        },
+      );
     } catch (e) {
       return ActionResult.error('Eroare la căutarea pe internet: $e');
     }
+  }
+
+  bool _isCatalogQuery(String query) {
+    final lower = query.toLowerCase();
+    return lower.contains('catalog') ||
+        lower.contains('oferte') ||
+        lower.contains('reduceri') ||
+        lower.contains('promotii') ||
+        lower.contains('promoții') ||
+        lower.contains('flyer') ||
+        lower.contains('săptămâna') ||
+        lower.contains('saptamana');
   }
 
   Future<ActionResult> _compareShoppingPrices(Map<String, dynamic> data) async {
@@ -547,6 +581,70 @@ class ActionExecutor {
     }
   }
 
+  Future<ActionResult> _getDiscounts(Map<String, dynamic> data) async {
+    try {
+      // Parametri opționali din intent
+      final rawStores = data['stores'];
+      final List<String>? stores = rawStores is List
+          ? rawStores.map((e) => e.toString()).toList()
+          : null;
+
+      final forceRefresh = data['force_refresh'] == true;
+
+      // Ia produsele curente din lista de cumpărături pentru prioritizare
+      final shoppingItems = await _db.getAllShoppingItems(purchased: false);
+      final shoppingNames = shoppingItems.map((i) => i.name).toList();
+
+      final result = await _discounts.getDiscounts(
+        shoppingListItems: shoppingNames,
+        stores: stores,
+        forceRefresh: forceRefresh,
+      );
+
+      if (!result.success) {
+        return ActionResult.error(
+          result.error ?? 'Nu am putut găsi reduceri acum.',
+        );
+      }
+
+      final totalFound =
+          result.prioritizedItems.length + result.otherItems.length;
+
+      if (totalFound == 0) {
+        return ActionResult.error(
+          'Nu am găsit reduceri disponibile momentan. Încearcă din nou puțin mai târziu.',
+        );
+      }
+
+      // Formatăm pentru Gemini / TTS
+      final formattedText = result.formatForAI();
+      // Construim lista serială pentru UI
+      final prioritizedJson = result.prioritizedItems
+          .take(6)
+          .map((i) => i.toJson())
+          .toList();
+      final othersJson = result.otherItems
+          .take(10)
+          .map((i) => i.toJson())
+          .toList();
+
+      return ActionResult.success(
+        formattedText,
+        data: {
+          'total_found': totalFound,
+          'matching_shopping_list': result.prioritizedItems.length,
+          'prioritized': prioritizedJson,
+          'others': othersJson,
+          'stores_checked': result.storeResults
+              .where((r) => r.error == null)
+              .map((r) => r.store)
+              .toList(),
+        },
+      );
+    } catch (e) {
+      return ActionResult.error('Eroare la căutarea reducerilor: $e');
+    }
+  }
   // ============ CALENDAR ACTIONS ============
 
   Future<ActionResult> _scheduleMeeting(Map<String, dynamic> data) async {
