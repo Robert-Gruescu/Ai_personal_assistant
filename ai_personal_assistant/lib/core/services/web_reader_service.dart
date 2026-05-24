@@ -1,6 +1,8 @@
 // web_reader_service.dart
 
+import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'gemini_service.dart';
 
 class WebReaderService {
@@ -10,7 +12,10 @@ class WebReaderService {
 
   final GeminiService _gemini = GeminiService();
 
-  // Domenii care folosesc JavaScript rendering — prețurile nu apar în HTML static
+  static String get _serperApiKey => dotenv.env['SERPER_API_KEY'] ?? '';
+  static const String _serperScrapeUrl = 'https://scrape.serper.dev';
+
+  // Site-uri care folosesc JavaScript rendering — prețurile nu apar în HTML static
   static const List<String> _jsRenderedDomains = [
     'lidl.ro',
     'kaufland.ro',
@@ -23,72 +28,128 @@ class WebReaderService {
     'metro.ro',
   ];
 
+  // Site-uri blocate — irelevante pentru prețuri/informații concrete
+  static const List<String> _blockedDomains = [
+    'tiktok.com',
+    'youtube.com',
+    't.co',
+  ];
+
   bool _isJsRendered(String url) {
     final lower = url.toLowerCase();
     return _jsRenderedDomains.any((domain) => lower.contains(domain));
   }
 
-  /// Fetch + extrage text relevant din pagină față de întrebare
-  Future<String?> readPageForQuestion({
-    required String url,
-    required String question,
-  }) async {
-    try {
-      // Sari peste site-urile care folosesc JS rendering
-      if (_isJsRendered(url)) {
-        print('⏭️ Skipping JS-rendered site: $url');
-        return null;
-      }
-
-      final html = await _fetchHtml(url);
-      if (html == null) return null;
-
-      final text = _extractText(html);
-      if (text.isEmpty) return null;
-
-      // Trimite textul paginii + întrebarea la Gemini să extragă ce e relevant
-      final response = await _gemini.extractRelevantInfo(
-        pageText: text,
-        question: question,
-        sourceUrl: url,
-      );
-
-      return response;
-    } catch (e) {
-      print('⚠️ WebReader error for $url: $e');
-      return null;
-    }
+  bool _isBlocked(String url) {
+    final lower = url.toLowerCase();
+    return _blockedDomains.any((domain) => lower.contains(domain));
   }
 
-  /// Citește primele N pagini din rezultate și combină informațiile.
-  /// Ia mai multe URL-uri decât maxPages ca să compenseze skip-urile.
+  /// Metodă principală — optimizată pentru minimum apeluri API:
+  /// - Încearcă HTTP static gratuit întâi (0 credite Serper)
+  /// - Dacă toate sunt JS-rendered, face 1 singur apel Serper Scrape
+  /// - 1 singur apel Gemini pentru tot contextul combinat
   Future<String> readTopResultsForQuestion({
     required List<String> urls,
     required String question,
     int maxPages = 2,
   }) async {
-    final results = <String>[];
-    // Luăm maxPages + 3 URL-uri extra ca să avem suficiente după ce sărim JS-rendered
-    final candidates = urls.take(maxPages + 3).toList();
+    // Filtrează domeniile blocate
+    final filteredUrls = urls.where((u) => !_isBlocked(u)).toList();
 
-    for (final url in candidates) {
-      if (results.length >= maxPages) break;
+    if (filteredUrls.isEmpty) {
+      print('⚠️ Toate URL-urile sunt blocate sau irelevante');
+      return '';
+    }
 
-      if (_isJsRendered(url)) {
-        print('⏭️ Skipping JS-rendered: $url');
-        continue;
-      }
+    final staticUrls = filteredUrls
+        .where((u) => !_isJsRendered(u))
+        .take(maxPages)
+        .toList();
 
-      print('📖 Reading: $url');
-      final content = await readPageForQuestion(url: url, question: question);
-      if (content != null && content.trim().isNotEmpty) {
-        results.add(content);
+    final jsUrls = filteredUrls.where((u) => _isJsRendered(u)).take(1).toList();
+
+    final textParts = <String>[];
+
+    // PASUL 1: Fetch static (gratuit)
+    for (final url in staticUrls) {
+      print('📖 Static fetch: $url');
+      final html = await _fetchHtml(url);
+      if (html != null) {
+        final text = _extractText(html);
+        if (text.isNotEmpty) {
+          textParts.add('Sursa: $url\n$text');
+          if (textParts.length >= maxPages) break;
+        }
       }
     }
 
-    if (results.isEmpty) return '';
-    return results.join('\n\n---\n\n');
+    // PASUL 2: Dacă nu avem context, încearcă 1 singur JS-rendered cu Serper Scrape
+    if (textParts.isEmpty && jsUrls.isNotEmpty) {
+      final url = jsUrls.first;
+      print('🔄 Serper Scrape (1 credit): $url');
+      final html = await _fetchWithSerperScrape(url);
+      if (html != null) {
+        final text = _extractText(html);
+        if (text.isNotEmpty) {
+          textParts.add('Sursa: $url\n$text');
+        }
+      }
+    }
+
+    if (textParts.isEmpty) return '';
+
+    // PASUL 3: UN SINGUR apel Gemini pentru tot contextul combinat
+    final combinedText = textParts.join('\n\n---\n\n');
+    final relevant = await _gemini.extractRelevantInfo(
+      pageText: combinedText,
+      question: question,
+    );
+
+    return relevant ?? '';
   }
+
+  // ── SERPER SCRAPE API (costă credite — folosit doar ca fallback) ──────────
+
+  Future<String?> _fetchWithSerperScrape(String url) async {
+    if (_serperApiKey.isEmpty) return null;
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse(_serperScrapeUrl),
+            headers: {
+              'X-API-KEY': _serperApiKey,
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({'url': url}),
+          )
+          .timeout(const Duration(seconds: 20));
+
+      if (response.statusCode == 200) {
+        try {
+          final data = jsonDecode(response.body) as Map<String, dynamic>;
+          final text = data['text'] as String?;
+          if (text != null && text.trim().isNotEmpty) {
+            print('✅ Serper Scrape OK: ${text.length} chars');
+            return text;
+          }
+          final html = data['html'] as String?;
+          if (html != null && html.trim().isNotEmpty) return html;
+        } catch (_) {
+          if (response.body.isNotEmpty) return response.body;
+        }
+      } else {
+        print('⚠️ Serper Scrape: ${response.statusCode} pentru $url');
+      }
+    } catch (e) {
+      print('⚠️ Serper Scrape error: $e');
+    }
+
+    return null;
+  }
+
+  // ── HTTP STATIC (gratuit) ─────────────────────────────────────────────────
 
   Future<String?> _fetchHtml(String url) async {
     try {
@@ -97,7 +158,8 @@ class WebReaderService {
             Uri.parse(url),
             headers: {
               'User-Agent':
-                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
               'Accept': 'text/html,application/xhtml+xml',
               'Accept-Language': 'ro-RO,ro;q=0.9,en;q=0.8',
             },
@@ -113,9 +175,19 @@ class WebReaderService {
     }
   }
 
+  // ── TEXT EXTRACTION ───────────────────────────────────────────────────────
+
   String _extractText(String html) {
+    // Dacă e deja text simplu (de la Serper Scrape cu câmpul "text")
+    if (!html.contains('<') || !html.contains('>')) {
+      final cleaned = html
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+          .trim();
+      return cleaned.length > 6000 ? cleaned.substring(0, 6000) : cleaned;
+    }
+
     String text = html
-        // Elimină scripturi și stiluri
         .replaceAll(
           RegExp(r'<script[^>]*>[\s\S]*?</script>', caseSensitive: false),
           '',
@@ -124,16 +196,12 @@ class WebReaderService {
           RegExp(r'<style[^>]*>[\s\S]*?</style>', caseSensitive: false),
           '',
         )
-        // Elimină comentarii HTML
         .replaceAll(RegExp(r'<!--[\s\S]*?-->'), '')
-        // Păstrează newline la taguri de bloc
         .replaceAll(
           RegExp(r'<(br|p|div|h[1-6]|li|tr)[^>]*>', caseSensitive: false),
           '\n',
         )
-        // Elimină toate tagurile rămase
         .replaceAll(RegExp(r'<[^>]+>'), '')
-        // Decodează entități HTML comune
         .replaceAll('&nbsp;', ' ')
         .replaceAll('&amp;', '&')
         .replaceAll('&lt;', '<')
@@ -141,13 +209,10 @@ class WebReaderService {
         .replaceAll('&quot;', '"')
         .replaceAll('&#39;', "'")
         .replaceAll('&euro;', '€')
-        .replaceAll('&lei;', 'lei')
-        // Curăță spații multiple
         .replaceAll(RegExp(r'[ \t]+'), ' ')
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
 
-    // Limitează la 8000 caractere — suficient pentru Gemini
-    return text.length > 8000 ? text.substring(0, 8000) : text;
+    return text.length > 6000 ? text.substring(0, 6000) : text;
   }
 }

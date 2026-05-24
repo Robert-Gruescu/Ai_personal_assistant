@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'dart:math';
 import '../services/local_assistant_service.dart';
 import '../core/services/services.dart';
+import '../core/services/widget_service.dart';
 import '../core/models/models.dart';
 
 // ─── Model classes ────────────────────────────────────────────────────────────
@@ -58,6 +59,7 @@ class _HomeScreenState extends State<HomeScreen>
   final SpeechToTextService _stt = SpeechToTextService();
   final TextToSpeechService _tts = TextToSpeechService();
   final ConfigService _config = ConfigService();
+  final WidgetService _widget = WidgetService();
 
   // ── Animation ──────────────────────────────────────────────────────────────
   late AnimationController _controller;
@@ -268,6 +270,10 @@ class _HomeScreenState extends State<HomeScreen>
 
     try {
       final result = await _service.sendMessage(text);
+
+      // Actualizează widget-ul după fiecare mesaj
+      await _widget.updateWidget();
+
       setState(() {
         isProcessing = false;
         _currentSession.messages.add(
@@ -312,6 +318,10 @@ class _HomeScreenState extends State<HomeScreen>
 
     try {
       final result = await _service.sendMessage(text);
+
+      // Actualizează widget-ul după fiecare mesaj
+      await _widget.updateWidget();
+
       setState(() {
         isProcessing = false;
         _currentSession.messages.add(
@@ -333,23 +343,27 @@ class _HomeScreenState extends State<HomeScreen>
   // BOTTOM SHEETS — Tasks & Shopping
   // ─────────────────────────────────────────────────────────────────────────
 
-  /// Opens the Tasks bottom sheet and loads tasks from the database.
   void _showTasksSheet() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _TasksSheet(db: DatabaseService()),
+      builder: (_) => _TasksSheet(
+        db: DatabaseService(),
+        onChanged: () => _widget.updateWidget(),
+      ),
     );
   }
 
-  /// Opens the Shopping bottom sheet and loads items from the database.
   void _showShoppingSheet() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _ShoppingSheet(db: DatabaseService()),
+      builder: (_) => _ShoppingSheet(
+        db: DatabaseService(),
+        onChanged: () => _widget.updateWidget(),
+      ),
     );
   }
 
@@ -471,6 +485,7 @@ class _HomeScreenState extends State<HomeScreen>
                 );
                 if (confirmed == true) {
                   await DatabaseService().clearAllData();
+                  await _widget.updateWidget();
                   if (mounted)
                     setState(() {
                       sessions.clear();
@@ -615,7 +630,6 @@ class _HomeScreenState extends State<HomeScreen>
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
                 children: [
-                  // Hamburger → drawer
                   IconButton(
                     icon: const Icon(Icons.menu),
                     onPressed: () => _showSidebarDrawer(context, isDark),
@@ -640,7 +654,6 @@ class _HomeScreenState extends State<HomeScreen>
                     ),
                   ),
                   const Spacer(),
-                  // Quick-access buttons in header
                   IconButton(
                     icon: const Icon(Icons.checklist_rounded),
                     tooltip: 'Task-uri',
@@ -691,7 +704,6 @@ class _HomeScreenState extends State<HomeScreen>
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      // Text input
                       Expanded(
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(
@@ -724,14 +736,12 @@ class _HomeScreenState extends State<HomeScreen>
                         ),
                       ),
                       const SizedBox(width: 8),
-                      // Send
                       IconButton(
                         onPressed: !isProcessing ? _sendTextMessage : null,
                         icon: const Icon(Icons.send),
                         color: Colors.indigo,
                       ),
                       const SizedBox(width: 8),
-                      // Mic orb
                       GestureDetector(
                         onTap: !isProcessing ? _toggleRecording : null,
                         child: AnimatedBuilder(
@@ -796,7 +806,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Sidebar drawer (mobile)
+  // Sidebar drawer
   // ─────────────────────────────────────────────────────────────────────────
 
   void _showSidebarDrawer(BuildContext context, bool isDark) {
@@ -816,14 +826,9 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Sidebar content
-  // ─────────────────────────────────────────────────────────────────────────
-
   Widget _buildSidebar(bool isDark) {
     return Column(
       children: [
-        // Profile area
         const CircleAvatar(
           radius: 32,
           backgroundColor: Colors.indigo,
@@ -852,7 +857,6 @@ class _HomeScreenState extends State<HomeScreen>
         ),
         const SizedBox(height: 20),
 
-        // ── Task & Shopping quick-access buttons ─────────────────────────
         Row(
           children: [
             Expanded(
@@ -861,7 +865,7 @@ class _HomeScreenState extends State<HomeScreen>
                 label: 'Task-uri',
                 color: Colors.indigo,
                 onTap: () {
-                  Navigator.pop(context); // close drawer first
+                  Navigator.pop(context);
                   _showTasksSheet();
                 },
               ),
@@ -882,7 +886,6 @@ class _HomeScreenState extends State<HomeScreen>
         ),
         const SizedBox(height: 20),
 
-        // New conversation button
         ElevatedButton.icon(
           onPressed: _createNewSession,
           icon: const Icon(Icons.add),
@@ -902,7 +905,6 @@ class _HomeScreenState extends State<HomeScreen>
         ),
         const SizedBox(height: 8),
 
-        // Conversation list
         Expanded(
           child: ListView.builder(
             itemCount: sessions.length,
@@ -1134,7 +1136,8 @@ class _SidebarActionButton extends StatelessWidget {
 
 class _TasksSheet extends StatefulWidget {
   final DatabaseService db;
-  const _TasksSheet({required this.db});
+  final VoidCallback? onChanged;
+  const _TasksSheet({required this.db, this.onChanged});
 
   @override
   State<_TasksSheet> createState() => _TasksSheetState();
@@ -1162,6 +1165,7 @@ class _TasksSheetState extends State<_TasksSheet> {
   Future<void> _complete(Task task) async {
     await widget.db.completeTask(task.id);
     setState(() => _tasks.removeWhere((t) => t.id == task.id));
+    widget.onChanged?.call();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('✅ "${task.title}" marcat ca finalizat')),
@@ -1172,6 +1176,7 @@ class _TasksSheetState extends State<_TasksSheet> {
   Future<void> _delete(Task task) async {
     await widget.db.deleteTask(task.id);
     setState(() => _tasks.removeWhere((t) => t.id == task.id));
+    widget.onChanged?.call();
   }
 
   @override
@@ -1185,7 +1190,6 @@ class _TasksSheetState extends State<_TasksSheet> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Handle bar
           Container(
             width: 40,
             height: 4,
@@ -1195,8 +1199,6 @@ class _TasksSheetState extends State<_TasksSheet> {
             ),
           ),
           const SizedBox(height: 16),
-
-          // Title row
           Row(
             children: [
               const Icon(
@@ -1219,8 +1221,6 @@ class _TasksSheetState extends State<_TasksSheet> {
           const SizedBox(height: 12),
           const Divider(height: 1),
           const SizedBox(height: 8),
-
-          // List
           if (_loading)
             const Padding(
               padding: EdgeInsets.all(32),
@@ -1256,7 +1256,6 @@ class _TasksSheetState extends State<_TasksSheet> {
                       : task.priority == 2
                       ? Colors.orange
                       : Colors.green;
-
                   return ListTile(
                     contentPadding: const EdgeInsets.symmetric(
                       horizontal: 4,
@@ -1296,7 +1295,6 @@ class _TasksSheetState extends State<_TasksSheet> {
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Priority dot
                         Container(
                           width: 10,
                           height: 10,
@@ -1306,7 +1304,6 @@ class _TasksSheetState extends State<_TasksSheet> {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        // Delete
                         IconButton(
                           icon: const Icon(
                             Icons.delete_outline,
@@ -1333,7 +1330,8 @@ class _TasksSheetState extends State<_TasksSheet> {
 
 class _ShoppingSheet extends StatefulWidget {
   final DatabaseService db;
-  const _ShoppingSheet({required this.db});
+  final VoidCallback? onChanged;
+  const _ShoppingSheet({required this.db, this.onChanged});
 
   @override
   State<_ShoppingSheet> createState() => _ShoppingSheetState();
@@ -1365,10 +1363,9 @@ class _ShoppingSheetState extends State<_ShoppingSheet> {
     await widget.db.markShoppingItemPurchased(item.id);
     setState(() {
       final idx = _items.indexWhere((i) => i.id == item.id);
-      if (idx != -1) {
-        _items[idx] = item.copyWith(isPurchased: true);
-      }
+      if (idx != -1) _items[idx] = item.copyWith(isPurchased: true);
     });
+    widget.onChanged?.call();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('🛒 "${item.name}" marcat ca cumpărat')),
@@ -1379,6 +1376,7 @@ class _ShoppingSheetState extends State<_ShoppingSheet> {
   Future<void> _delete(ShoppingItem item) async {
     await widget.db.deleteShoppingItem(item.id);
     setState(() => _items.removeWhere((i) => i.id == item.id));
+    widget.onChanged?.call();
   }
 
   @override
@@ -1395,7 +1393,6 @@ class _ShoppingSheetState extends State<_ShoppingSheet> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Handle bar
           Container(
             width: 40,
             height: 4,
@@ -1405,8 +1402,6 @@ class _ShoppingSheetState extends State<_ShoppingSheet> {
             ),
           ),
           const SizedBox(height: 16),
-
-          // Title row
           Row(
             children: [
               const Icon(
@@ -1420,7 +1415,6 @@ class _ShoppingSheetState extends State<_ShoppingSheet> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               const Spacer(),
-              // Toggle show purchased
               TextButton(
                 onPressed: () {
                   setState(() {
@@ -1436,8 +1430,6 @@ class _ShoppingSheetState extends State<_ShoppingSheet> {
               ),
             ],
           ),
-
-          // Remaining count
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
@@ -1448,7 +1440,6 @@ class _ShoppingSheetState extends State<_ShoppingSheet> {
           const SizedBox(height: 8),
           const Divider(height: 1),
           const SizedBox(height: 8),
-
           if (_loading)
             const Padding(
               padding: EdgeInsets.all(32),
@@ -1480,7 +1471,6 @@ class _ShoppingSheetState extends State<_ShoppingSheet> {
               child: ListView(
                 shrinkWrap: true,
                 children: [
-                  // ── Items to buy ────────────────────────────────────────
                   ...unpurchased.map(
                     (item) => _ShoppingTile(
                       item: item,
@@ -1488,8 +1478,6 @@ class _ShoppingSheetState extends State<_ShoppingSheet> {
                       onDelete: () => _delete(item),
                     ),
                   ),
-
-                  // ── Already purchased ───────────────────────────────────
                   if (_showPurchased && purchased.isNotEmpty) ...[
                     const SizedBox(height: 12),
                     Text(
@@ -1546,10 +1534,7 @@ class _ShoppingTile extends StatelessWidget {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: purchased ? Colors.teal : Colors.transparent,
-            border: Border.all(
-              color: purchased ? Colors.teal : Colors.teal,
-              width: 2,
-            ),
+            border: Border.all(color: Colors.teal, width: 2),
           ),
           child: purchased
               ? const Icon(Icons.check, size: 16, color: Colors.white)

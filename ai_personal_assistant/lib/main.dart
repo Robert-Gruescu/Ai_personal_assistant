@@ -4,21 +4,17 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'screens/home_screen_local.dart';
 import 'core/services/database_service.dart';
+import 'core/services/widget_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Încarcă variabilele de mediu din .env
   await dotenv.load(fileName: '.env');
-
-  // Inițializare locale pentru date formatting
   await initializeDateFormatting('ro_RO', null);
-
-  // Inițializare Hive
   await Hive.initFlutter();
-
-  // Inițializare baza de date locală
   await DatabaseService().initialize();
+  await WidgetService().initialize();
+  await WidgetService().updateWidget();
 
   runApp(const MyApp());
 }

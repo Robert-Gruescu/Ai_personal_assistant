@@ -28,6 +28,7 @@ environment:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
+
   flutter:
     sdk: flutter
   google_sign_in: ^6.1.0
@@ -99,6 +100,8 @@ dependencies:
   
   # Intl for date formatting
   intl: ^0.20.1
+
+  home_widget: ^0.7.0
 
 dev_dependencies:
   flutter_test:

@@ -85,7 +85,6 @@ class ActionExecutor {
 
   Future<ActionResult> _addTask(Map<String, dynamic> data) async {
     try {
-      // Check if data contains a 'tasks' list (multiple tasks)
       if (data.containsKey('tasks') && data['tasks'] is List) {
         final tasksList = data['tasks'] as List;
         final addedTasks = <String>[];
@@ -100,7 +99,6 @@ class ActionExecutor {
           );
           addedTasks.add(task.title);
         }
-
         final allTasks = await _db.getAllTasks(completed: false);
         return ActionResult.success(
           'Am adăugat ${addedTasks.length} task-uri: ${addedTasks.join(", ")}.',
@@ -112,7 +110,6 @@ class ActionExecutor {
         );
       }
 
-      // Single task
       final task = await _db.createTask(
         title: data['title'] ?? 'Task fără titlu',
         description: data['description'],
@@ -120,7 +117,6 @@ class ActionExecutor {
         priority: _parsePriority(data['priority']),
         category: data['category'],
       );
-
       final allTasks = await _db.getAllTasks(completed: false);
       return ActionResult.success(
         'Task-ul "${task.title}" a fost adăugat.',
@@ -141,7 +137,6 @@ class ActionExecutor {
         completed: data['completed'] as bool?,
         category: data['category'] as String?,
       );
-
       final taskList = tasks
           .map(
             (t) => {
@@ -155,7 +150,6 @@ class ActionExecutor {
             },
           )
           .toList();
-
       return ActionResult.success(
         tasks.isEmpty
             ? 'Nu ai niciun task activ.'
@@ -170,17 +164,14 @@ class ActionExecutor {
   Future<ActionResult> _completeTask(Map<String, dynamic> data) async {
     try {
       Task? task;
-
       if (data['task_id'] != null) {
         task = await _db.getTask(data['task_id'].toString());
       } else if (data['task_title'] != null) {
         task = await _db.findTaskByTitle(data['task_title']);
       }
-
       if (task == null || task.id.isEmpty) {
         return ActionResult.error('Task-ul nu a fost găsit.');
       }
-
       await _db.completeTask(task.id);
       return ActionResult.success(
         'Task-ul "${task.title}" a fost marcat ca finalizat.',
@@ -193,17 +184,14 @@ class ActionExecutor {
   Future<ActionResult> _deleteTask(Map<String, dynamic> data) async {
     try {
       Task? task;
-
       if (data['task_id'] != null) {
         task = await _db.getTask(data['task_id'].toString());
       } else if (data['task_title'] != null) {
         task = await _db.findTaskByTitle(data['task_title']);
       }
-
       if (task == null || task.id.isEmpty) {
         return ActionResult.error('Task-ul nu a fost găsit.');
       }
-
       await _db.deleteTask(task.id);
       return ActionResult.success('Task-ul "${task.title}" a fost șters.');
     } catch (e) {
@@ -215,7 +203,6 @@ class ActionExecutor {
 
   Future<ActionResult> _addShoppingItem(Map<String, dynamic> data) async {
     try {
-      // Check if data contains an 'items' list (multiple items)
       if (data.containsKey('items') && data['items'] is List) {
         final itemsList = data['items'] as List;
         final addedItems = <String>[];
@@ -232,19 +219,16 @@ class ActionExecutor {
         }
 
         final allItems = await _db.getAllShoppingItems(purchased: false);
-
         List<String> storeSuggestions = _suggestStoresForShopping(addedItems);
         String suggestionText = storeSuggestions.isNotEmpty
             ? ' Îți recomand să verifici: ${storeSuggestions.join(', ')}.'
             : '';
         Map<String, dynamic>? liveComparisonData;
 
-        // For larger lists, compare live prices and recommend the best store this week.
         if (addedItems.length >= 6) {
           final liveComparison = await _search.compareShoppingListPrices(
             addedItems,
           );
-
           if (liveComparison.success &&
               liveComparison.recommendedStore != null &&
               liveComparison.recommendedStore!.isNotEmpty) {
@@ -253,24 +237,24 @@ class ActionExecutor {
               (s) => s.store == topStore,
               orElse: () => liveComparison.storeSummaries.first,
             );
-
             final firstDealItems = liveComparison.matchedPrices
                 .where((m) => m.store == topStore)
                 .map((m) => m.item)
                 .toSet()
                 .take(3)
                 .toList();
-
             suggestionText =
-                ' Recomandare live: săptămâna aceasta ieși mai bine la $topStore (estimare coș: ${topSummary.estimatedTotal.toStringAsFixed(2)} lei pentru ${topSummary.matchedItems}/${liveComparison.scannedItems.length} produse analizate).${firstDealItems.isNotEmpty ? ' Produse avantajoase: ${firstDealItems.join(', ')}.' : ''}';
-
+                ' Recomandare live: săptămâna aceasta ieși mai bine la $topStore '
+                '(estimare coș: ${topSummary.estimatedTotal.toStringAsFixed(2)} lei '
+                'pentru ${topSummary.matchedItems}/${liveComparison.scannedItems.length} '
+                'produse analizate).${firstDealItems.isNotEmpty ? ' Produse avantajoase: ${firstDealItems.join(', ')}.' : ''}';
             storeSuggestions = [topStore];
             liveComparisonData = liveComparison.toJson();
           }
         }
 
         return ActionResult.success(
-          'Am adăugat ${addedItems.length} produse: ${addedItems.join(", ")}.${suggestionText}',
+          'Am adăugat ${addedItems.length} produse: ${addedItems.join(", ")}.$suggestionText',
           data: {
             'count': addedItems.length,
             'items': addedItems,
@@ -282,7 +266,6 @@ class ActionExecutor {
         );
       }
 
-      // Single item
       final item = await _db.createShoppingItem(
         name: data['name'] ?? 'Produs',
         quantity: data['quantity'] ?? '1',
@@ -290,7 +273,6 @@ class ActionExecutor {
         notes: data['notes'],
         priceEstimate: data['price_estimate']?.toDouble(),
       );
-
       final allItems = await _db.getAllShoppingItems(purchased: false);
       return ActionResult.success(
         'Am adăugat "${item.name}" pe lista de cumpărături.',
@@ -310,7 +292,6 @@ class ActionExecutor {
       final items = await _db.getAllShoppingItems(
         purchased: data['purchased'] as bool?,
       );
-
       final itemList = items
           .map(
             (i) => {
@@ -323,9 +304,7 @@ class ActionExecutor {
             },
           )
           .toList();
-
       final total = await _db.getShoppingListTotal();
-
       return ActionResult.success(
         items.isEmpty
             ? 'Lista ta de cumpărături este goală.'
@@ -344,17 +323,14 @@ class ActionExecutor {
   Future<ActionResult> _removeShoppingItem(Map<String, dynamic> data) async {
     try {
       ShoppingItem? item;
-
       if (data['item_id'] != null) {
         item = await _db.getShoppingItem(data['item_id'].toString());
       } else if (data['item_name'] != null) {
         item = await _db.findShoppingItemByName(data['item_name']);
       }
-
       if (item == null) {
         return ActionResult.error('Produsul nu a fost găsit pe listă.');
       }
-
       await _db.deleteShoppingItem(item.id);
       return ActionResult.success(
         '"${item.name}" a fost șters de pe lista de cumpărături.',
@@ -371,25 +347,19 @@ class ActionExecutor {
       final to = data['to'] as String?;
       final subject = data['subject'] as String?;
       final body = data['body'] as String?;
-
-      if (to == null || to.isEmpty) {
+      if (to == null || to.isEmpty)
         return ActionResult.error('Adresa de email lipsește.');
-      }
-      if (subject == null || subject.isEmpty) {
+      if (subject == null || subject.isEmpty)
         return ActionResult.error('Subiectul emailului lipsește.');
-      }
-      if (body == null || body.isEmpty) {
+      if (body == null || body.isEmpty)
         return ActionResult.error('Conținutul emailului lipsește.');
-      }
 
       final result = await _email.sendEmail(
         to: to,
         subject: subject,
         body: body,
       );
-
       if (result.success) {
-        // Log the action
         await _db.logAction(
           actionType: 'email',
           target: to,
@@ -408,7 +378,6 @@ class ActionExecutor {
 
   Future<ActionResult> _readEmails(Map<String, dynamic> data) async {
     final result = await _email.getRecentEmails(count: data['count'] ?? 5);
-
     if (result.success && result.emails != null) {
       return ActionResult.success(
         'Ai ${result.emails!.length} emailuri recente.',
@@ -417,34 +386,26 @@ class ActionExecutor {
           'emails': result.emails!.map((e) => e.toJson()).toList(),
         },
       );
-    } else {
-      return ActionResult.error(
-        result.error ?? 'Eroare la citirea emailurilor.',
-      );
     }
+    return ActionResult.error(result.error ?? 'Eroare la citirea emailurilor.');
   }
 
   Future<ActionResult> _readLastEmail(Map<String, dynamic> data) async {
     final result = await _email.getLastEmail();
-
     if (result.success && result.email != null) {
       return ActionResult.success(
         'Ultimul email de la ${result.email!.from}.',
         data: {'email': result.email!.toJson()},
       );
-    } else {
-      return ActionResult.error(result.error ?? 'Eroare la citirea emailului.');
     }
+    return ActionResult.error(result.error ?? 'Eroare la citirea emailului.');
   }
 
   Future<ActionResult> _searchEmails(Map<String, dynamic> data) async {
     final query = data['query'] as String?;
-    if (query == null || query.isEmpty) {
+    if (query == null || query.isEmpty)
       return ActionResult.error('Termenul de căutare lipsește.');
-    }
-
     final result = await _email.searchEmails(query);
-
     if (result.success && result.emails != null) {
       return ActionResult.success(
         'Am găsit ${result.emails!.length} emailuri.',
@@ -453,11 +414,10 @@ class ActionExecutor {
           'emails': result.emails!.map((e) => e.toJson()).toList(),
         },
       );
-    } else {
-      return ActionResult.error(
-        result.error ?? 'Eroare la căutarea emailurilor.',
-      );
     }
+    return ActionResult.error(
+      result.error ?? 'Eroare la căutarea emailurilor.',
+    );
   }
 
   // ============ SEARCH ACTIONS ============
@@ -469,7 +429,13 @@ class ActionExecutor {
         return ActionResult.error('Termenul de căutare lipsește.');
       }
 
-      final result = await _search.search(query);
+      // Optimizează query-ul pentru prețuri la magazine specifice
+      final optimizedQuery = _optimizePriceQuery(query);
+      if (optimizedQuery != query) {
+        print('🔄 Query optimizat: $optimizedQuery');
+      }
+
+      final result = await _search.search(optimizedQuery);
 
       if (!result.success) {
         return ActionResult.error(result.error ?? 'Eroare la căutare.');
@@ -487,7 +453,6 @@ class ActionExecutor {
       final isDiscountQuery = _isCatalogQuery(query);
       Map<String, String>? catalogData;
       List<String> flyerImages = [];
-
       if (isDiscountQuery) {
         catalogData = await _search.extractCatalogOffers(query, result.results);
         flyerImages = await _search.findFlyerImageUrls(query, result.results);
@@ -514,6 +479,41 @@ class ActionExecutor {
     }
   }
 
+  /// Optimizează query-ul pentru căutări de prețuri la magazine specifice.
+  /// Adaugă site-uri de comparare prețuri cu HTML static (pret.ro, compari.ro)
+  /// ca să evite rezultate de pe Reddit, Facebook etc.
+  String _optimizePriceQuery(String query) {
+    final lower = query.toLowerCase();
+
+    final isMagazinSpecific =
+        lower.contains('lidl') ||
+        lower.contains('kaufland') ||
+        lower.contains('carrefour') ||
+        lower.contains('auchan') ||
+        lower.contains('mega image') ||
+        lower.contains('mega-image') ||
+        lower.contains('penny') ||
+        lower.contains('profi');
+
+    final isPretQuery =
+        lower.contains('pret') ||
+        lower.contains('preț') ||
+        lower.contains('costa') ||
+        lower.contains('costă') ||
+        lower.contains('cat face') ||
+        lower.contains('cât face') ||
+        lower.contains('cat costa') ||
+        lower.contains('cât costă');
+
+    if (isPretQuery && isMagazinSpecific) {
+      // Forțează Serper să returneze rezultate de pe comparatoare de prețuri
+      // cu HTML static în loc de Lidl.ro/Kaufland.ro (JS-rendered)
+      return '$query site:pret.ro OR site:compari.ro OR site:supermarket.ro';
+    }
+
+    return query;
+  }
+
   bool _isCatalogQuery(String query) {
     final lower = query.toLowerCase();
     return lower.contains('catalog') ||
@@ -532,7 +532,6 @@ class ActionExecutor {
       final List<String> items = rawItems is List
           ? rawItems.map((e) => e.toString()).toList()
           : [];
-
       final List<String> normalizedItems = items
           .map((e) => e.trim())
           .where((e) => e.isNotEmpty)
@@ -542,7 +541,6 @@ class ActionExecutor {
         final current = await _db.getAllShoppingItems(purchased: false);
         normalizedItems.addAll(current.map((e) => e.name));
       }
-
       if (normalizedItems.isEmpty) {
         return ActionResult.error(
           'Nu ai produse în lista de cumpărături pentru comparație.',
@@ -564,7 +562,6 @@ class ActionExecutor {
         (s) => s.store == topStore,
         orElse: () => comparison.storeSummaries.first,
       );
-
       final dealItems = comparison.matchedPrices
           .where((m) => m.store == topStore)
           .map((m) => m.item)
@@ -573,7 +570,9 @@ class ActionExecutor {
           .toList();
 
       return ActionResult.success(
-        'Pe baza prețurilor live, cel mai avantajos magazin acum este $topStore (estimare: ${topSummary.estimatedTotal.toStringAsFixed(2)} lei).${dealItems.isNotEmpty ? ' Produse cu preț bun: ${dealItems.join(', ')}.' : ''}',
+        'Pe baza prețurilor live, cel mai avantajos magazin acum este $topStore '
+        '(estimare: ${topSummary.estimatedTotal.toStringAsFixed(2)} lei).'
+        '${dealItems.isNotEmpty ? ' Produse cu preț bun: ${dealItems.join(', ')}.' : ''}',
         data: comparison.toJson(),
       );
     } catch (e) {
@@ -583,15 +582,12 @@ class ActionExecutor {
 
   Future<ActionResult> _getDiscounts(Map<String, dynamic> data) async {
     try {
-      // Parametri opționali din intent
       final rawStores = data['stores'];
       final List<String>? stores = rawStores is List
           ? rawStores.map((e) => e.toString()).toList()
           : null;
-
       final forceRefresh = data['force_refresh'] == true;
 
-      // Ia produsele curente din lista de cumpărături pentru prioritizare
       final shoppingItems = await _db.getAllShoppingItems(purchased: false);
       final shoppingNames = shoppingItems.map((i) => i.name).toList();
 
@@ -609,32 +605,22 @@ class ActionExecutor {
 
       final totalFound =
           result.prioritizedItems.length + result.otherItems.length;
-
       if (totalFound == 0) {
         return ActionResult.error(
           'Nu am găsit reduceri disponibile momentan. Încearcă din nou puțin mai târziu.',
         );
       }
 
-      // Formatăm pentru Gemini / TTS
-      final formattedText = result.formatForAI();
-      // Construim lista serială pentru UI
-      final prioritizedJson = result.prioritizedItems
-          .take(6)
-          .map((i) => i.toJson())
-          .toList();
-      final othersJson = result.otherItems
-          .take(10)
-          .map((i) => i.toJson())
-          .toList();
-
       return ActionResult.success(
-        formattedText,
+        result.formatForAI(),
         data: {
           'total_found': totalFound,
           'matching_shopping_list': result.prioritizedItems.length,
-          'prioritized': prioritizedJson,
-          'others': othersJson,
+          'prioritized': result.prioritizedItems
+              .take(6)
+              .map((i) => i.toJson())
+              .toList(),
+          'others': result.otherItems.take(10).map((i) => i.toJson()).toList(),
           'stores_checked': result.storeResults
               .where((r) => r.error == null)
               .map((r) => r.store)
@@ -645,6 +631,7 @@ class ActionExecutor {
       return ActionResult.error('Eroare la căutarea reducerilor: $e');
     }
   }
+
   // ============ CALENDAR ACTIONS ============
 
   Future<ActionResult> _scheduleMeeting(Map<String, dynamic> data) async {
@@ -657,26 +644,19 @@ class ActionExecutor {
       final description = data['description'] as String?;
       final durationMinutes = data['duration_minutes'] ?? 60;
 
-      if (title == null || title.isEmpty) {
+      if (title == null || title.isEmpty)
         return ActionResult.error('Titlul întâlnirii lipsește.');
-      }
-      if (date == null || time == null) {
+      if (date == null || time == null)
         return ActionResult.error('Data și ora întâlnirii lipsesc.');
-      }
 
-      // Parse date and time
       final startTime = _parseDateTime(date, time);
-      if (startTime == null) {
+      if (startTime == null)
         return ActionResult.error('Format invalid pentru dată sau oră.');
-      }
 
       final endTime = startTime.add(Duration(minutes: durationMinutes as int));
-
-      // Generate a simple Meet link (in production, use Google Calendar API)
       final meetId = DateTime.now().millisecondsSinceEpoch.toString();
       final meetLink = 'https://meet.google.com/$meetId';
 
-      // Create calendar event
       final event = await _db.createCalendarEvent(
         title: title,
         description: description,
@@ -688,7 +668,6 @@ class ActionExecutor {
         reminderTime: startTime.subtract(const Duration(hours: 1)),
       );
 
-      // Send invitation email if attendee is specified
       if (attendeeEmail != null && attendeeEmail.isNotEmpty) {
         await _email.sendMeetingInvitation(
           to: attendeeEmail,
@@ -698,7 +677,6 @@ class ActionExecutor {
           meetLink: meetLink,
           description: description,
         );
-
         await _db.logAction(
           actionType: 'meeting_invitation',
           target: attendeeEmail,
@@ -706,7 +684,6 @@ class ActionExecutor {
         );
       }
 
-      // Send confirmation email to self
       final selfEmail = _email.userEmail;
       if (selfEmail != null && selfEmail.isNotEmpty) {
         try {
@@ -719,13 +696,11 @@ class ActionExecutor {
             description:
                 'Confirmare întâlnire: ${description ?? title}\n\nParticipant: ${attendeeName ?? attendeeEmail ?? "N/A"}',
           );
-          print('📧 Email de confirmare trimis la: $selfEmail');
         } catch (e) {
           print('⚠️ Nu s-a putut trimite email-ul de confirmare: $e');
         }
       }
 
-      // Schedule local notifications (30 min before and at meeting time)
       try {
         await _notification.scheduleMeetingReminder(
           id: event.id.hashCode,
@@ -739,12 +714,10 @@ class ActionExecutor {
           meetLink: meetLink,
           meetingTime: startTime,
         );
-        print('🔔 Notificări programate pentru întâlnire');
       } catch (e) {
         print('⚠️ Nu s-au putut programa notificările: $e');
       }
 
-      // Add event to device's native calendar with 30-min reminder
       try {
         final calendarEventId = await _deviceCalendar.addMeetingToCalendar(
           title: title,
@@ -757,9 +730,7 @@ class ActionExecutor {
           reminderMinutesBefore: 30,
         );
         if (calendarEventId != null) {
-          print('📅 Eveniment adăugat automat în calendar: $calendarEventId');
-        } else {
-          print('⚠️ Nu s-a putut adăuga în calendar (verifică permisiunile)');
+          print('📅 Eveniment adăugat în calendar: $calendarEventId');
         }
       } catch (e) {
         print('⚠️ Eroare la adăugarea în calendar: $e');
@@ -769,7 +740,8 @@ class ActionExecutor {
       final formattedTime = DateFormat('HH:mm').format(startTime);
 
       return ActionResult.success(
-        'Întâlnirea "$title" a fost programată pentru $formattedDate la ora $formattedTime.${attendeeEmail != null ? " Invitație trimisă către $attendeeEmail." : ""}',
+        'Întâlnirea "$title" a fost programată pentru $formattedDate la ora $formattedTime.'
+        '${attendeeEmail != null ? " Invitație trimisă către $attendeeEmail." : ""}',
         data: {
           'event_id': event.id,
           'title': title,
@@ -792,20 +764,16 @@ class ActionExecutor {
       final description = data['description'] as String?;
       final durationMinutes = data['duration_minutes'] ?? 60;
 
-      if (title == null || title.isEmpty) {
+      if (title == null || title.isEmpty)
         return ActionResult.error('Titlul evenimentului lipsește.');
-      }
-      if (date == null || time == null) {
+      if (date == null || time == null)
         return ActionResult.error('Data și ora evenimentului lipsesc.');
-      }
 
       final startTime = _parseDateTime(date, time);
-      if (startTime == null) {
+      if (startTime == null)
         return ActionResult.error('Format invalid pentru dată sau oră.');
-      }
 
       final endTime = startTime.add(Duration(minutes: durationMinutes as int));
-
       final event = await _db.createCalendarEvent(
         title: title,
         description: description,
@@ -833,7 +801,6 @@ class ActionExecutor {
   Future<ActionResult> _listCalendarEvents(Map<String, dynamic> data) async {
     try {
       final events = await _db.getUpcomingEvents(days: 7);
-
       final eventList = events
           .map(
             (e) => {
@@ -847,7 +814,6 @@ class ActionExecutor {
             },
           )
           .toList();
-
       return ActionResult.success(
         events.isEmpty
             ? 'Nu ai evenimente programate săptămâna aceasta.'
@@ -863,7 +829,6 @@ class ActionExecutor {
     try {
       final eventId = data['event_id']?.toString();
       final title = data['title'] as String?;
-
       CalendarEvent? event;
 
       if (eventId != null) {
@@ -881,19 +846,19 @@ class ActionExecutor {
         );
       }
 
-      if (event == null || event.id.isEmpty) {
+      if (event == null || event.id.isEmpty)
         return ActionResult.error('Evenimentul nu a fost găsit.');
-      }
 
       await _db.cancelCalendarEvent(event.id);
 
-      // Send cancellation email if there was an attendee
       if (event.attendeeEmail != null && event.attendeeEmail!.isNotEmpty) {
         await _email.sendEmail(
           to: event.attendeeEmail!,
           subject: 'Anulare: ${event.title}',
           body:
-              'Întâlnirea "${event.title}" programată pentru ${DateFormat('d MMMM yyyy').format(event.startTime)} a fost anulată.\n\nNe cerem scuze pentru inconvenient.',
+              'Întâlnirea "${event.title}" programată pentru '
+              '${DateFormat('d MMMM yyyy').format(event.startTime)} a fost anulată.\n\n'
+              'Ne cerem scuze pentru inconvenient.',
         );
       }
 
@@ -909,25 +874,17 @@ class ActionExecutor {
 
   DateTime? _parseDate(String? dateStr) {
     if (dateStr == null || dateStr.isEmpty) return null;
-
     try {
-      // Try ISO format
       return DateTime.parse(dateStr);
     } catch (_) {
-      // Try common formats
       final now = DateTime.now();
       final lower = dateStr.toLowerCase();
-
-      if (lower == 'mâine' || lower == 'maine') {
+      if (lower == 'mâine' || lower == 'maine')
         return DateTime(now.year, now.month, now.day + 1);
-      }
-      if (lower == 'poimâine' || lower == 'poimaine') {
+      if (lower == 'poimâine' || lower == 'poimaine')
         return DateTime(now.year, now.month, now.day + 2);
-      }
-      if (lower == 'azi' || lower == 'astăzi' || lower == 'astazi') {
+      if (lower == 'azi' || lower == 'astăzi' || lower == 'astazi')
         return DateTime(now.year, now.month, now.day);
-      }
-
       return null;
     }
   }
@@ -936,7 +893,6 @@ class ActionExecutor {
     try {
       final parsedDate = _parseDate(date);
       if (parsedDate == null) return null;
-
       final timeParts = time.split(':');
       if (timeParts.length >= 2) {
         final hour = int.parse(timeParts[0]);
@@ -949,7 +905,6 @@ class ActionExecutor {
           minute,
         );
       }
-
       return parsedDate;
     } catch (_) {
       return null;
@@ -979,7 +934,6 @@ class ActionExecutor {
 
   List<String> _suggestStoresForShopping(List<String> itemNames) {
     if (itemNames.isEmpty) return const [];
-
     final normalized = itemNames.map((e) => e.toLowerCase()).toList();
 
     final hasFreshProduce = normalized.any(
@@ -1009,21 +963,18 @@ class ActionExecutor {
         'Auchan (bun pentru cumpărături în volum)',
       ];
     }
-
     if (hasFreshProduce) {
       return const [
         'Lidl (preț bun la legume/fructe)',
         'Piața locală (produse proaspete)',
       ];
     }
-
     if (hasHousehold) {
       return const [
         'Carrefour (raion casă/curățenie)',
         'Auchan (gamă largă non-food)',
       ];
     }
-
     return const ['Lidl', 'Kaufland', 'Carrefour'];
   }
 }
