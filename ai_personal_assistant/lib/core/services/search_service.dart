@@ -5,15 +5,67 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONFIGURARE SERPER.DEV
+// CONFIGURARE
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// 1. Creează cont gratuit la https://serper.dev (fără card, 2500 căutări)
-// 2. Copiază API key-ul din dashboard → API keys
-// 3. Pune-l în fișierul .env:
-//    SERPER_API_KEY=cheia_ta_aici
+// Motor principal: Magazin propriu (Supabase) — prețuri reale, fără credite
+// Fallback: Serper.dev — pentru căutări generale pe internet
+//
+// În fișierul .env:
+//   SERPER_API_KEY=cheia_ta_serper
 //
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Produs din magazinul propriu
+class ShopProduct {
+  final int id;
+  final String name;
+  final String description;
+  final double price;
+  final String imageUrl;
+  final int categoryId;
+  final bool faraZahar;
+  final bool bio;
+  final int stock;
+
+  ShopProduct({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.price,
+    required this.imageUrl,
+    required this.categoryId,
+    required this.faraZahar,
+    required this.bio,
+    required this.stock,
+  });
+
+  factory ShopProduct.fromJson(Map<String, dynamic> json) {
+    return ShopProduct(
+      id: json['id'] ?? 0,
+      name: json['name'] ?? '',
+      description: json['description'] ?? '',
+      price: (json['price'] ?? 0).toDouble(),
+      imageUrl: json['image_url'] ?? '',
+      categoryId: json['category_id'] ?? 0,
+      faraZahar: json['fara_zahar'] ?? false,
+      bio: json['bio'] ?? false,
+      stock: json['stock'] ?? 0,
+    );
+  }
+
+  /// Formatează produsul pentru AI
+  String toAIString() {
+    final extras = <String>[];
+    if (faraZahar) extras.add('fără zahăr');
+    if (bio) extras.add('bio');
+    if (stock == 0) extras.add('stoc epuizat');
+
+    return '${name}: ${price.toStringAsFixed(2)} lei'
+        '${extras.isNotEmpty ? ' (${extras.join(', ')})' : ''}'
+        ' — $description';
+  }
+}
 
 /// Search result from the internet
 class SearchResult {
@@ -44,12 +96,16 @@ class SearchResponse {
   final List<SearchResult> results;
   final String? error;
 
+  // Produse găsite în magazinul propriu
+  final List<ShopProduct> shopProducts;
+
   SearchResponse({
     required this.success,
     required this.query,
     this.directAnswer,
     required this.results,
     this.error,
+    this.shopProducts = const [],
   });
 
   factory SearchResponse.error(String query, String errorMessage) {
@@ -62,17 +118,31 @@ class SearchResponse {
   }
 
   String formatForAI() {
-    if (!success ||
+    if (!success &&
+        shopProducts.isEmpty &&
         (results.isEmpty && (directAnswer == null || directAnswer!.isEmpty))) {
       return 'Nu am găsit rezultate pentru: $query';
     }
 
     final buffer = StringBuffer();
+
+    // Produse din magazinul propriu — prioritate maximă
+    if (shopProducts.isNotEmpty) {
+      buffer.writeln('Produse găsite în magazin pentru "$query":');
+      buffer.writeln();
+      for (final p in shopProducts.take(5)) {
+        buffer.writeln('• ${p.toAIString()}');
+      }
+      buffer.writeln();
+    }
+
+    // Răspuns direct din internet
     if (directAnswer != null && directAnswer!.isNotEmpty) {
       buffer.writeln('Răspuns direct: $directAnswer');
       buffer.writeln();
     }
 
+    // Rezultate internet
     if (results.isNotEmpty) {
       buffer.writeln('Rezultate căutare pentru "$query":');
       buffer.writeln();
@@ -185,14 +255,20 @@ class ShoppingPriceComparisonResponse {
   };
 }
 
-/// Internet Search Service — motor: Serper.dev (Google Search API)
+/// Internet Search Service
+/// Motor principal: Magazin propriu (Supabase) — prețuri reale, fără credite
+/// Fallback: Serper.dev — pentru căutări generale
 class SearchService {
   static final SearchService _instance = SearchService._internal();
   factory SearchService() => _instance;
   SearchService._internal();
 
-  static String get _serperApiKey => dotenv.env['SERPER_API_KEY'] ?? '';
+  // ── Supabase config ───────────────────────────────────────────────────────
+  static String get _supabaseUrl => dotenv.env['SUPABASE_URL'] ?? '';
+  static String get _supabaseAnonKey => dotenv.env['SUPABASE_ANON_KEY'] ?? '';
 
+  // ── Serper config ─────────────────────────────────────────────────────────
+  static String get _serperApiKey => dotenv.env['SERPER_API_KEY'] ?? '';
   static const String _serperUrl = 'https://google.serper.dev/search';
 
   static const int _maxPdfBytes = 25 * 1024 * 1024;
@@ -223,29 +299,136 @@ class SearchService {
       return _searchCache[cacheKey]!;
     }
 
-    if (!_serperConfigured) {
-      print('❌ Serper API key not configured');
+    // PASUL 1: Caută întâi în magazinul propriu (gratuit, fără limite)
+    final shopProducts = await _searchInShop(query);
+    if (shopProducts.isNotEmpty) {
+      print(
+        '🛒 Găsite ${shopProducts.length} produse în magazin pentru "$query"',
+      );
+    }
+
+    // PASUL 2: Caută pe internet cu Serper (doar dacă e nevoie de info extra)
+    SearchResponse internetResult = SearchResponse(
+      success: true,
+      query: query,
+      results: [],
+      shopProducts: shopProducts,
+    );
+
+    if (_serperConfigured) {
+      final serperResult = await _searchSerper(query, numResults: numResults);
+      internetResult = SearchResponse(
+        success: serperResult.success || shopProducts.isNotEmpty,
+        query: query,
+        directAnswer: serperResult.directAnswer,
+        results: serperResult.results,
+        shopProducts: shopProducts,
+        error: serperResult.error,
+      );
+    } else if (shopProducts.isEmpty) {
       return SearchResponse(
         success: false,
         query: query,
         results: [],
-        error: 'SERPER_API_KEY lipsește din fișierul .env.',
+        error:
+            'SERPER_API_KEY lipsește din .env și nu am găsit produse în magazin.',
       );
     }
 
-    final result = await _searchSerper(query, numResults: numResults);
-
-    if (result.success && result.results.isNotEmpty) {
+    // Cache
+    if (internetResult.success &&
+        (internetResult.results.isNotEmpty ||
+            internetResult.shopProducts.isNotEmpty)) {
       if (_searchCache.length >= 50) {
         _searchCache.remove(_searchCache.keys.first);
       }
-      _searchCache[cacheKey] = result;
+      _searchCache[cacheKey] = internetResult;
     }
 
-    return result;
+    return internetResult;
   }
 
-  // ── SERPER.DEV ───────────────────────────────────────────────────────────
+  // ── MAGAZIN PROPRIU (Supabase) ────────────────────────────────────────────
+
+  Future<List<ShopProduct>> _searchInShop(String query) async {
+    try {
+      // Curăță query-ul pentru căutare
+      final cleanQuery = query
+          .toLowerCase()
+          .replaceAll(
+            RegExp(
+              r'(preț|pret|costa|costă|cât face|cat face|cat costa|cât costă|la|din|magazin)',
+              caseSensitive: false,
+            ),
+            '',
+          )
+          .trim();
+
+      if (cleanQuery.isEmpty) return [];
+
+      // Supabase full-text search cu ilike pentru căutare parțială
+      final uri = Uri.parse(
+        '$_supabaseUrl/products?select=id,name,description,price,image_url,category_id,fara_zahar,bio,stock'
+        '&name=ilike.*${Uri.encodeComponent(cleanQuery)}*'
+        '&order=name',
+      );
+
+      final response = await http
+          .get(
+            uri,
+            headers: {
+              'apikey': _supabaseAnonKey,
+              'Authorization': 'Bearer $_supabaseAnonKey',
+              'Content-Type': 'application/json',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as List;
+        final products = data.map((p) => ShopProduct.fromJson(p)).toList();
+        print('✅ Supabase: ${products.length} produse pentru "$cleanQuery"');
+        return products;
+      } else {
+        print('⚠️ Supabase error: ${response.statusCode}');
+        return [];
+      }
+    } catch (e) {
+      print('⚠️ Shop search error: $e');
+      return [];
+    }
+  }
+
+  /// Caută toate produsele din magazin (pentru lista completă)
+  Future<List<ShopProduct>> getAllShopProducts() async {
+    try {
+      final uri = Uri.parse(
+        '$_supabaseUrl/products?select=id,name,description,price,image_url,category_id,fara_zahar,bio,stock'
+        '&order=name',
+      );
+
+      final response = await http
+          .get(
+            uri,
+            headers: {
+              'apikey': _supabaseAnonKey,
+              'Authorization': 'Bearer $_supabaseAnonKey',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as List;
+        return data.map((p) => ShopProduct.fromJson(p)).toList();
+      }
+      return [];
+    } catch (e) {
+      print('⚠️ getAllShopProducts error: $e');
+      return [];
+    }
+  }
+
+  // ── SERPER.DEV (fallback pentru căutări generale) ────────────────────────
 
   Future<SearchResponse> _searchSerper(
     String query, {
@@ -273,7 +456,6 @@ class SearchService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
 
-        // Answer box (răspuns direct)
         final answerBox = data['answerBox'] as Map<String, dynamic>?;
         String? directAnswer;
         if (answerBox != null) {
@@ -283,17 +465,7 @@ class SearchService {
               answerBox['title'] as String?;
         }
 
-        // Organic results
         final organic = data['organic'] as List? ?? [];
-        if (organic.isEmpty && directAnswer == null) {
-          return SearchResponse(
-            success: false,
-            query: query,
-            results: [],
-            error: 'Niciun rezultat găsit pentru: $query',
-          );
-        }
-
         final results = organic.map((item) {
           return SearchResult(
             title: item['title'] ?? '',
@@ -310,7 +482,7 @@ class SearchService {
           results: results,
         );
       } else if (response.statusCode == 429) {
-        print('⚠️ Serper: limită de căutări depășită');
+        print('⚠️ Serper: limită depășită');
         return SearchResponse(
           success: false,
           query: query,
@@ -318,16 +490,16 @@ class SearchService {
           error: 'Limita de căutări Serper a fost depășită.',
         );
       } else {
-        print('⚠️ Serper error: ${response.statusCode} — ${response.body}');
+        print('⚠️ Serper error: ${response.statusCode}');
         return SearchResponse(
           success: false,
           query: query,
           results: [],
-          error: 'Eroare Serper Search: ${response.statusCode}',
+          error: 'Eroare Serper: ${response.statusCode}',
         );
       }
     } catch (e) {
-      print('❌ Serper Search error: $e');
+      print('❌ Serper error: $e');
       return SearchResponse(
         success: false,
         query: query,
@@ -396,9 +568,7 @@ class SearchService {
           )
           .timeout(const Duration(seconds: 25));
 
-      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-        return null;
-      }
+      if (response.statusCode != 200 || response.bodyBytes.isEmpty) return null;
 
       final contentType = response.headers['content-type'] ?? '';
       final mimeType = contentType.split(';').first.trim();
@@ -480,8 +650,7 @@ class SearchService {
         success: true,
         recommendedStore: best.store,
         rationale: highlighted.isNotEmpty
-            ? 'Estimarea cea mai bună este la ${best.store}. '
-                  'Produse avantajoase: ${highlighted.join(', ')}.'
+            ? 'Estimarea cea mai bună este la ${best.store}. Produse avantajoase: ${highlighted.join(', ')}.'
             : 'Estimarea totală cea mai bună este la ${best.store}.',
         storeSummaries: summaries,
         matchedPrices: matches,
@@ -584,9 +753,7 @@ class SearchService {
 
     final pdfSearch = await search('$query catalog pdf', numResults: 8);
     for (final r in pdfSearch.results) {
-      if (!candidates.any((c) => c.link == r.link)) {
-        candidates.add(r);
-      }
+      if (!candidates.any((c) => c.link == r.link)) candidates.add(r);
     }
 
     for (final r in candidates) {
@@ -662,7 +829,6 @@ class SearchService {
         : result.substring(0, _maxCatalogChars);
   }
 
-  /// Șterge cache-ul de căutări
   void clearSearchCache() {
     _searchCache.clear();
   }
