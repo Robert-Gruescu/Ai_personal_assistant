@@ -43,6 +43,8 @@ class _HomeScreenState extends State<HomeScreen>
   bool isPlaying = false;
   bool isServiceReady = false;
   bool isApiKeyConfigured = false;
+  bool isGoogleConnected = false;
+  String? googleEmail;
 
   String statusText = 'Inițializare...';
   String sessionId = '';
@@ -60,6 +62,7 @@ class _HomeScreenState extends State<HomeScreen>
   final TextToSpeechService _tts = TextToSpeechService();
   final ConfigService _config = ConfigService();
   final WidgetService _widget = WidgetService();
+  final GoogleCalendarService _googleCalendar = GoogleCalendarService();
 
   // ── Animation ──────────────────────────────────────────────────────────────
   late AnimationController _controller;
@@ -98,6 +101,10 @@ class _HomeScreenState extends State<HomeScreen>
 
       final apiKey = await _config.geminiApiKey;
       isApiKeyConfigured = apiKey != null && apiKey.isNotEmpty;
+
+      // Reconectare silențioasă la Google (dacă utilizatorul s-a conectat deja).
+      isGoogleConnected = await _googleCalendar.signInSilently();
+      googleEmail = _googleCalendar.userEmail;
 
       _tts.onStart = () {
         if (mounted) setState(() => isPlaying = true);
@@ -425,6 +432,41 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  Future<void> _connectGoogle() async {
+    if (mounted) {
+      setState(() => statusText = '🔄 Conectare la Google...');
+    }
+    final ok = await _googleCalendar.signIn();
+    if (mounted) {
+      setState(() {
+        isGoogleConnected = ok;
+        googleEmail = _googleCalendar.userEmail;
+        statusText = ok
+            ? '✅ Conectat la Google: $googleEmail'
+            : '⚠️ Conectarea la Google a eșuat';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            ok
+                ? 'Cont Google conectat: $googleEmail. Întâlnirile vor avea link Meet real.'
+                : 'Conectarea la Google a eșuat. Verifică configurarea OAuth.',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _disconnectGoogle() async {
+    await _googleCalendar.signOut();
+    if (mounted) {
+      setState(() {
+        isGoogleConnected = false;
+        googleEmail = null;
+      });
+    }
+  }
+
   void _showSettingsDialog() {
     showDialog(
       context: context,
@@ -453,6 +495,27 @@ class _HomeScreenState extends State<HomeScreen>
               onTap: () {
                 Navigator.pop(context);
                 _showEmailConfigDialog();
+              },
+            ),
+            ListTile(
+              leading: Icon(
+                Icons.video_call,
+                color: isGoogleConnected ? Colors.green : null,
+              ),
+              title: const Text('Google Meet / Calendar'),
+              subtitle: Text(
+                isGoogleConnected
+                    ? 'Conectat: ${googleEmail ?? ""}'
+                    : 'Neconectat — link-uri Meet nefuncționale',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.pop(context);
+                if (isGoogleConnected) {
+                  _disconnectGoogle();
+                } else {
+                  _connectGoogle();
+                }
               },
             ),
             ListTile(

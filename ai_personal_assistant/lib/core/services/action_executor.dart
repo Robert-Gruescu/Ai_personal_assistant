@@ -3,6 +3,7 @@ import '../services/email_service.dart';
 import '../services/search_service.dart';
 import '../services/notification_service.dart';
 import '../services/device_calendar_service.dart';
+import '../services/google_calendar_service.dart';
 import '../models/models.dart';
 import 'package:intl/intl.dart';
 import '../services/discount_service.dart';
@@ -42,6 +43,7 @@ class ActionExecutor {
   final SearchService _search = SearchService();
   final NotificationService _notification = NotificationService();
   final DeviceCalendarService _deviceCalendar = DeviceCalendarService();
+  final GoogleCalendarService _googleCalendar = GoogleCalendarService();
   final DiscountService _discounts = DiscountService();
   final WebReaderService _webReader = WebReaderService();
 
@@ -654,8 +656,24 @@ class ActionExecutor {
         return ActionResult.error('Format invalid pentru dată sau oră.');
 
       final endTime = startTime.add(Duration(minutes: durationMinutes as int));
-      final meetId = DateTime.now().millisecondsSinceEpoch.toString();
-      final meetLink = 'https://meet.google.com/$meetId';
+
+      // Încearcă mai întâi crearea unui eveniment REAL în Google Calendar,
+      // care generează un link Google Meet autentic și funcțional.
+      final googleEvent = await _googleCalendar.createEventWithMeet(
+        title: title,
+        description: description,
+        startTime: startTime,
+        endTime: endTime,
+        attendeeEmail: attendeeEmail,
+        reminderMinutesBefore: 30,
+      );
+
+      final bool meetIsReal = googleEvent != null && googleEvent.hasMeetLink;
+      // Dacă Google a creat camera Meet, folosim link-ul real. Altfel, fallback
+      // la un link local (NEFUNCȚIONAL) ca aplicația să nu se blocheze.
+      final meetLink = meetIsReal
+          ? googleEvent.meetLink!
+          : 'https://meet.google.com/${DateTime.now().millisecondsSinceEpoch}';
 
       final event = await _db.createCalendarEvent(
         title: title,
@@ -718,36 +736,47 @@ class ActionExecutor {
         print('⚠️ Nu s-au putut programa notificările: $e');
       }
 
-      try {
-        final calendarEventId = await _deviceCalendar.addMeetingToCalendar(
-          title: title,
-          startTime: startTime,
-          endTime: endTime,
-          description: description,
-          meetLink: meetLink,
-          attendeeEmail: attendeeEmail,
-          attendeeName: attendeeName,
-          reminderMinutesBefore: 30,
-        );
-        if (calendarEventId != null) {
-          print('📅 Eveniment adăugat în calendar: $calendarEventId');
+      // Adaugă în calendarul nativ Android DOAR dacă NU am creat evenimentul în
+      // Google Calendar (când e real, Google îl sincronizează deja pe telefon).
+      if (!meetIsReal) {
+        try {
+          final calendarEventId = await _deviceCalendar.addMeetingToCalendar(
+            title: title,
+            startTime: startTime,
+            endTime: endTime,
+            description: description,
+            meetLink: meetLink,
+            attendeeEmail: attendeeEmail,
+            attendeeName: attendeeName,
+            reminderMinutesBefore: 30,
+          );
+          if (calendarEventId != null) {
+            print('📅 Eveniment adăugat în calendar: $calendarEventId');
+          }
+        } catch (e) {
+          print('⚠️ Eroare la adăugarea în calendar: $e');
         }
-      } catch (e) {
-        print('⚠️ Eroare la adăugarea în calendar: $e');
       }
 
       final formattedDate = DateFormat('d MMMM yyyy', 'ro').format(startTime);
       final formattedTime = DateFormat('HH:mm').format(startTime);
 
+      // Mesaj diferit în funcție de existența unui link Meet real.
+      final meetNote = meetIsReal
+          ? ' Am creat și un link Google Meet funcțional.'
+          : ' Notă: pentru un link Google Meet funcțional, conectează-ți contul Google din Setări.';
+
       return ActionResult.success(
         'Întâlnirea "$title" a fost programată pentru $formattedDate la ora $formattedTime.'
-        '${attendeeEmail != null ? " Invitație trimisă către $attendeeEmail." : ""}',
+        '${attendeeEmail != null ? " Invitație trimisă către $attendeeEmail." : ""}'
+        '$meetNote',
         data: {
           'event_id': event.id,
           'title': title,
           'start_time': startTime.toIso8601String(),
           'end_time': endTime.toIso8601String(),
           'meet_link': meetLink,
+          'meet_is_real': meetIsReal,
           'attendee_email': attendeeEmail,
         },
       );
