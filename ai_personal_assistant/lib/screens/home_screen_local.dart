@@ -62,7 +62,7 @@ class _HomeScreenState extends State<HomeScreen>
   final TextToSpeechService _tts = TextToSpeechService();
   final ConfigService _config = ConfigService();
   final WidgetService _widget = WidgetService();
-  final GoogleCalendarService _googleCalendar = GoogleCalendarService();
+  final GoogleAuthService _googleAuth = GoogleAuthService();
 
   // ── Animation ──────────────────────────────────────────────────────────────
   late AnimationController _controller;
@@ -103,8 +103,9 @@ class _HomeScreenState extends State<HomeScreen>
       isApiKeyConfigured = apiKey != null && apiKey.isNotEmpty;
 
       // Reconectare silențioasă la Google (dacă utilizatorul s-a conectat deja).
-      isGoogleConnected = await _googleCalendar.signInSilently();
-      googleEmail = _googleCalendar.userEmail;
+      isGoogleConnected = await _googleAuth.signInSilently();
+      googleEmail = _googleAuth.userEmail;
+      if (isGoogleConnected) _service.syncGoogleEmail();
 
       _tts.onStart = () {
         if (mounted) setState(() => isPlaying = true);
@@ -436,11 +437,12 @@ class _HomeScreenState extends State<HomeScreen>
     if (mounted) {
       setState(() => statusText = '🔄 Conectare la Google...');
     }
-    final ok = await _googleCalendar.signIn();
+    final ok = await _googleAuth.signIn();
+    if (ok) _service.syncGoogleEmail();
     if (mounted) {
       setState(() {
         isGoogleConnected = ok;
-        googleEmail = _googleCalendar.userEmail;
+        googleEmail = _googleAuth.userEmail;
         statusText = ok
             ? '✅ Conectat la Google: $googleEmail'
             : '⚠️ Conectarea la Google a eșuat';
@@ -458,7 +460,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _disconnectGoogle() async {
-    await _googleCalendar.signOut();
+    await _googleAuth.signOut();
     if (mounted) {
       setState(() {
         isGoogleConnected = false;
@@ -502,11 +504,11 @@ class _HomeScreenState extends State<HomeScreen>
                 Icons.video_call,
                 color: isGoogleConnected ? Colors.green : null,
               ),
-              title: const Text('Google Meet / Calendar'),
+              title: const Text('Cont Google (Meet, Calendar, Gmail)'),
               subtitle: Text(
                 isGoogleConnected
                     ? 'Conectat: ${googleEmail ?? ""}'
-                    : 'Neconectat — link-uri Meet nefuncționale',
+                    : 'Neconectat — necesar pentru Meet real și citire/trimitere Gmail',
               ),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {

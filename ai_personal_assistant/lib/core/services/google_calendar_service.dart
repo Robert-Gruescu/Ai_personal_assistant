@@ -1,6 +1,5 @@
-import 'package:google_sign_in/google_sign_in.dart';
-import 'package:extension_google_sign_in_as_googleapis_auth/extension_google_sign_in_as_googleapis_auth.dart';
 import 'package:googleapis/calendar/v3.dart' as gcal;
+import 'google_auth_service.dart';
 
 /// Rezultatul creării unui eveniment cu link Google Meet real.
 class GoogleMeetEvent {
@@ -13,88 +12,27 @@ class GoogleMeetEvent {
   bool get hasMeetLink => meetLink != null && meetLink!.isNotEmpty;
 }
 
-/// Serviciu pentru autentificare Google și creare de evenimente reale
-/// în Google Calendar, cu link Google Meet generat de Google (nu fabricat local).
+/// Serviciu pentru creare de evenimente reale în Google Calendar, cu link
+/// Google Meet generat de Google (nu fabricat local).
 ///
-/// Folosește:
-///   - google_sign_in            → autentificarea utilizatorului (OAuth)
-///   - extension_google_sign_in_as_googleapis_auth → client HTTP autentificat
-///   - googleapis (Calendar v3)  → inserarea evenimentului cu conferenceData
-///
-/// IMPORTANT: pentru a funcționa pe Android trebuie configurat în Google Cloud
-/// Console un OAuth Client ID de tip „Android” cu package name
-/// `com.example.ai_personal_assistant` și amprenta SHA-1 a cheii de semnare,
-/// iar Google Calendar API trebuie activat. Vezi DOCUMENTATIE_APLICATIE.md.
+/// Autentificarea NU mai e gestionată aici — se folosește serviciul central
+/// `GoogleAuthService` (o singură conectare pentru Calendar + Gmail). Acest
+/// serviciu doar cere clientul autentificat și apelează Calendar API.
 class GoogleCalendarService {
   static final GoogleCalendarService _instance =
       GoogleCalendarService._internal();
   factory GoogleCalendarService() => _instance;
   GoogleCalendarService._internal();
 
-  final GoogleSignIn _googleSignIn = GoogleSignIn(
-    scopes: <String>[gcal.CalendarApi.calendarEventsScope],
-  );
+  final GoogleAuthService _auth = GoogleAuthService();
 
-  GoogleSignInAccount? _currentUser;
+  bool get isSignedIn => _auth.isSignedIn;
+  String? get userEmail => _auth.userEmail;
 
-  bool get isSignedIn => _currentUser != null;
-  String? get userEmail => _currentUser?.email;
-
-  /// Încearcă o autentificare silențioasă (fără a deschide fereastra de login)
-  /// pe baza unei sesiuni Google existente. Returnează true dacă reușește.
-  Future<bool> signInSilently() async {
-    try {
-      _currentUser = await _googleSignIn.signInSilently();
-      if (_currentUser != null) {
-        print('✅ Google sign-in silent OK: ${_currentUser!.email}');
-      }
-      return _currentUser != null;
-    } catch (e) {
-      print('⚠️ Google signInSilently error: $e');
-      return false;
-    }
-  }
-
-  /// Deschide fereastra de login Google pentru a alege contul.
-  Future<bool> signIn() async {
-    try {
-      _currentUser = await _googleSignIn.signIn();
-      if (_currentUser != null) {
-        print('✅ Google sign-in OK: ${_currentUser!.email}');
-      } else {
-        print('⚠️ Google sign-in anulat de utilizator');
-      }
-      return _currentUser != null;
-    } catch (e) {
-      print('❌ Google sign-in error: $e');
-      return false;
-    }
-  }
-
-  /// Deconectează contul Google.
-  Future<void> signOut() async {
-    try {
-      await _googleSignIn.disconnect();
-    } catch (_) {
-      await _googleSignIn.signOut();
-    }
-    _currentUser = null;
-    print('👋 Google sign-out');
-  }
-
-  /// Construiește un client Calendar API autentificat. Întoarce null dacă
-  /// utilizatorul nu este conectat și nici autentificarea silențioasă nu reușește.
+  /// Construiește un client Calendar API autentificat. Null dacă neconectat.
   Future<gcal.CalendarApi?> _calendarApi() async {
-    if (_currentUser == null) {
-      await signInSilently();
-    }
-    if (_currentUser == null) return null;
-
-    final client = await _googleSignIn.authenticatedClient();
-    if (client == null) {
-      print('⚠️ Nu am putut obține clientul autentificat Google');
-      return null;
-    }
+    final client = await _auth.authClient();
+    if (client == null) return null;
     return gcal.CalendarApi(client);
   }
 

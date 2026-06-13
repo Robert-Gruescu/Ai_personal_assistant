@@ -156,6 +156,7 @@ class LocalAssistantService {
   final EmailService _email = EmailService();
   final NotificationService _notification = NotificationService();
   final DeviceCalendarService _deviceCalendar = DeviceCalendarService();
+  final GoogleAuthService _googleAuth = GoogleAuthService();
 
   bool _isInitialized = false;
   String? _currentConversationId;
@@ -222,6 +223,15 @@ class LocalAssistantService {
   Future<bool> configureApiKey(String apiKey) async {
     await _config.setGeminiApiKey(apiKey);
     return await _gemini.initialize(apiKey);
+  }
+
+  /// Sincronizează adresa de email folosită de AI cu contul Google conectat.
+  /// Când utilizatorul e conectat la Google, emailurile se trimit de pe acel cont.
+  void syncGoogleEmail() {
+    if (_googleAuth.isSignedIn && _googleAuth.userEmail != null) {
+      _gemini.setUserEmail(_googleAuth.userEmail);
+      print('📧 Email AI sincronizat cu contul Google: ${_googleAuth.userEmail}');
+    }
   }
 
   Future<void> reloadEmailConfig() async {
@@ -324,6 +334,12 @@ class LocalAssistantService {
               message: message,
               actionResult: actionResult,
               persistentContext: persistentContext,
+            );
+          } else if (_isEmailReadIntent(aiResult.intent!)) {
+            responseText = await _buildEmailResponse(
+              message: message,
+              intent: aiResult.intent!,
+              actionResult: actionResult,
             );
           } else {
             responseText = _updateResponseWithActionResult(
@@ -464,6 +480,67 @@ class LocalAssistantService {
       actionResult,
       'Nu am găsit informații relevante.',
     );
+  }
+
+  bool _isEmailReadIntent(String intent) =>
+      intent == 'read_emails' ||
+      intent == 'read_last_email' ||
+      intent == 'search_emails' ||
+      intent == 'summarize_email';
+
+  /// Construiește un răspuns natural (citit/rezumat) pentru emailuri, trimițând
+  /// conținutul emailurilor la Gemini pentru o formulare prietenoasă în română.
+  Future<String> _buildEmailResponse({
+    required String message,
+    required String intent,
+    required ActionResult actionResult,
+  }) async {
+    final data = actionResult.data ?? {};
+
+    final emails = <Map<String, dynamic>>[];
+    if (data['emails'] is List) {
+      for (final e in (data['emails'] as List)) {
+        if (e is Map) emails.add(Map<String, dynamic>.from(e));
+      }
+    }
+    if (data['email'] is Map) {
+      emails.add(Map<String, dynamic>.from(data['email'] as Map));
+    }
+
+    if (emails.isEmpty) {
+      return intent == 'search_emails'
+          ? 'Nu am găsit emailuri care să corespundă căutării.'
+          : 'Nu ai emailuri de afișat momentan.';
+    }
+
+    final buffer = StringBuffer();
+    for (int i = 0; i < emails.length && i < 5; i++) {
+      final e = emails[i];
+      final from = (e['from'] ?? '').toString();
+      final subject = (e['subject'] ?? '').toString();
+      final body = (e['body'] ?? '').toString();
+      final shortBody = body.length > 800 ? body.substring(0, 800) : body;
+      buffer.writeln('Email ${i + 1}:');
+      if (from.isNotEmpty) buffer.writeln('De la: $from');
+      if (subject.isNotEmpty) buffer.writeln('Subiect: $subject');
+      if (shortBody.trim().isNotEmpty) buffer.writeln('Conținut: $shortBody');
+      buffer.writeln();
+    }
+
+    final wantsSummary =
+        intent == 'summarize_email' || data['needs_summary'] == true;
+    final instruction = wantsSummary
+        ? 'Rezumă pe scurt și natural în română emailul de mai jos (cine a scris, '
+              'despre ce este vorba, ce se cere). Maxim 3-4 propoziții.'
+        : 'Prezintă natural în română emailurile de mai jos (de la cine, subiectul '
+              'și pe scurt despre ce este vorba). Concis, ușor de ascultat.';
+
+    final ai = await _gemini.chatWithSearchContext(
+      '$message\n\nInstrucțiune: $instruction Nu inventa informații care nu apar mai jos.',
+      buffer.toString(),
+      conversationHistory: _conversationHistory,
+    );
+    return _extractCleanResponse(ai.response);
   }
 
   /// Extrage textul curat dintr-un răspuns AI.

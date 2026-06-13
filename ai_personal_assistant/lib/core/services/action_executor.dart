@@ -4,6 +4,8 @@ import '../services/search_service.dart';
 import '../services/notification_service.dart';
 import '../services/device_calendar_service.dart';
 import '../services/google_calendar_service.dart';
+import '../services/google_auth_service.dart';
+import '../services/gmail_service.dart';
 import '../models/models.dart';
 import 'package:intl/intl.dart';
 import '../services/discount_service.dart';
@@ -44,6 +46,8 @@ class ActionExecutor {
   final NotificationService _notification = NotificationService();
   final DeviceCalendarService _deviceCalendar = DeviceCalendarService();
   final GoogleCalendarService _googleCalendar = GoogleCalendarService();
+  final GoogleAuthService _googleAuth = GoogleAuthService();
+  final GmailService _gmail = GmailService();
   final DiscountService _discounts = DiscountService();
   final WebReaderService _webReader = WebReaderService();
 
@@ -73,6 +77,7 @@ class ActionExecutor {
       'list_calendar_events': _listCalendarEvents,
       'cancel_calendar_event': _cancelCalendarEvent,
       'get_discounts': _getDiscounts,
+      'summarize_email': _summarizeEmail,
     };
 
     final handler = handlers[intent];
@@ -344,6 +349,34 @@ class ActionExecutor {
 
   // ============ EMAIL ACTIONS ============
 
+  /// Adresa de email a expeditorului curent (Google dacă e conectat, altfel SMTP).
+  String? get senderEmail =>
+      _googleAuth.isSignedIn ? _gmail.userEmail : _email.userEmail;
+
+  /// Trimitere unificată: Gmail API dacă utilizatorul e conectat la Google,
+  /// altfel SMTP (rezervă). Astfel nu mai e nevoie de parolă SMTP când e Google.
+  Future<EmailResult> _sendMail({
+    required String to,
+    required String subject,
+    required String body,
+    bool isHtml = false,
+  }) async {
+    if (_googleAuth.isSignedIn) {
+      return await _gmail.sendEmail(
+        to: to,
+        subject: subject,
+        body: body,
+        isHtml: isHtml,
+      );
+    }
+    return await _email.sendEmail(
+      to: to,
+      subject: subject,
+      body: body,
+      isHtml: isHtml,
+    );
+  }
+
   Future<ActionResult> _sendEmail(Map<String, dynamic> data) async {
     try {
       final to = data['to'] as String?;
@@ -356,11 +389,7 @@ class ActionExecutor {
       if (body == null || body.isEmpty)
         return ActionResult.error('Conținutul emailului lipsește.');
 
-      final result = await _email.sendEmail(
-        to: to,
-        subject: subject,
-        body: body,
-      );
+      final result = await _sendMail(to: to, subject: subject, body: body);
       if (result.success) {
         await _db.logAction(
           actionType: 'email',
@@ -379,7 +408,15 @@ class ActionExecutor {
   }
 
   Future<ActionResult> _readEmails(Map<String, dynamic> data) async {
-    final result = await _email.getRecentEmails(count: data['count'] ?? 5);
+    if (!_googleAuth.isSignedIn) {
+      return ActionResult.error(
+        'Pentru a citi emailurile, conectează-ți contul Google din Setări.',
+      );
+    }
+    final count = data['count'] is int
+        ? data['count'] as int
+        : int.tryParse('${data['count']}') ?? 5;
+    final result = await _gmail.getRecentEmails(count: count);
     if (result.success && result.emails != null) {
       return ActionResult.success(
         'Ai ${result.emails!.length} emailuri recente.',
@@ -393,7 +430,12 @@ class ActionExecutor {
   }
 
   Future<ActionResult> _readLastEmail(Map<String, dynamic> data) async {
-    final result = await _email.getLastEmail();
+    if (!_googleAuth.isSignedIn) {
+      return ActionResult.error(
+        'Pentru a citi emailurile, conectează-ți contul Google din Setări.',
+      );
+    }
+    final result = await _gmail.getLastEmail();
     if (result.success && result.email != null) {
       return ActionResult.success(
         'Ultimul email de la ${result.email!.from}.',
@@ -404,10 +446,15 @@ class ActionExecutor {
   }
 
   Future<ActionResult> _searchEmails(Map<String, dynamic> data) async {
+    if (!_googleAuth.isSignedIn) {
+      return ActionResult.error(
+        'Pentru a căuta emailuri, conectează-ți contul Google din Setări.',
+      );
+    }
     final query = data['query'] as String?;
     if (query == null || query.isEmpty)
       return ActionResult.error('Termenul de căutare lipsește.');
-    final result = await _email.searchEmails(query);
+    final result = await _gmail.searchEmails(query);
     if (result.success && result.emails != null) {
       return ActionResult.success(
         'Am găsit ${result.emails!.length} emailuri.',
@@ -419,6 +466,48 @@ class ActionExecutor {
     }
     return ActionResult.error(
       result.error ?? 'Eroare la căutarea emailurilor.',
+    );
+  }
+
+  /// Returnează emailul țintă pentru rezumat (după index sau căutare) ca date brute.
+  /// Rezumarea propriu-zisă (AI) se face în LocalAssistantService.
+  Future<ActionResult> _summarizeEmail(Map<String, dynamic> data) async {
+    if (!_googleAuth.isSignedIn) {
+      return ActionResult.error(
+        'Pentru a rezuma emailuri, conectează-ți contul Google din Setări.',
+      );
+    }
+
+    // Dacă există un termen de căutare, caută emailul respectiv; altfel ia ultimul.
+    final query = data['query'] as String?;
+    EmailResult result;
+    if (query != null && query.trim().isNotEmpty) {
+      result = await _gmail.searchEmails(query, count: 1);
+    } else {
+      result = await _gmail.getRecentEmails(count: 5);
+    }
+
+    if (!result.success) {
+      return ActionResult.error(result.error ?? 'Nu am putut accesa emailul.');
+    }
+
+    final emails = result.emails ?? [];
+    if (emails.isEmpty) {
+      return ActionResult.error('Nu am găsit emailul de rezumat.');
+    }
+
+    // index: 1 = ultimul (cel mai recent), 2 = penultimul etc.
+    final index = data['index'] is int
+        ? data['index'] as int
+        : int.tryParse('${data['index']}') ?? 1;
+    final target = emails[(index - 1).clamp(0, emails.length - 1)];
+
+    return ActionResult.success(
+      'Am găsit emailul de la ${target.from}.',
+      data: {
+        'email': target.toJson(),
+        'needs_summary': true,
+      },
     );
   }
 
@@ -686,36 +775,50 @@ class ActionExecutor {
         reminderTime: startTime.subtract(const Duration(hours: 1)),
       );
 
-      if (attendeeEmail != null && attendeeEmail.isNotEmpty) {
-        await _email.sendMeetingInvitation(
-          to: attendeeEmail,
-          attendeeName: attendeeName ?? 'Participant',
-          meetingTitle: title,
-          startTime: startTime,
-          meetLink: meetLink,
-          description: description,
-        );
-        await _db.logAction(
-          actionType: 'meeting_invitation',
-          target: attendeeEmail,
-          content: 'Invited to: $title at $date $time',
-        );
-      }
-
-      final selfEmail = _email.userEmail;
-      if (selfEmail != null && selfEmail.isNotEmpty) {
-        try {
+      if (meetIsReal) {
+        // Google a trimis deja invitația OFICIALĂ (cu link Meet real) către
+        // participant prin sendUpdates:'all'. Nu mai trimitem un email duplicat;
+        // doar logăm acțiunea. Organizatorul vede evenimentul în calendarul propriu.
+        if (attendeeEmail != null && attendeeEmail.isNotEmpty) {
+          await _db.logAction(
+            actionType: 'meeting_invitation',
+            target: attendeeEmail,
+            content: 'Invitație Google Calendar: $title la $date $time',
+          );
+        }
+      } else {
+        // Fallback (Google neconectat): notificăm manual prin email (SMTP).
+        if (attendeeEmail != null && attendeeEmail.isNotEmpty) {
           await _email.sendMeetingInvitation(
-            to: selfEmail,
-            attendeeName: 'Tu',
+            to: attendeeEmail,
+            attendeeName: attendeeName ?? 'Participant',
             meetingTitle: title,
             startTime: startTime,
             meetLink: meetLink,
-            description:
-                'Confirmare întâlnire: ${description ?? title}\n\nParticipant: ${attendeeName ?? attendeeEmail ?? "N/A"}',
+            description: description,
           );
-        } catch (e) {
-          print('⚠️ Nu s-a putut trimite email-ul de confirmare: $e');
+          await _db.logAction(
+            actionType: 'meeting_invitation',
+            target: attendeeEmail,
+            content: 'Invited to: $title at $date $time',
+          );
+        }
+
+        final selfEmail = _email.userEmail;
+        if (selfEmail != null && selfEmail.isNotEmpty) {
+          try {
+            await _email.sendMeetingInvitation(
+              to: selfEmail,
+              attendeeName: 'Tu',
+              meetingTitle: title,
+              startTime: startTime,
+              meetLink: meetLink,
+              description:
+                  'Confirmare întâlnire: ${description ?? title}\n\nParticipant: ${attendeeName ?? attendeeEmail ?? "N/A"}',
+            );
+          } catch (e) {
+            print('⚠️ Nu s-a putut trimite email-ul de confirmare: $e');
+          }
         }
       }
 
@@ -881,7 +984,7 @@ class ActionExecutor {
       await _db.cancelCalendarEvent(event.id);
 
       if (event.attendeeEmail != null && event.attendeeEmail!.isNotEmpty) {
-        await _email.sendEmail(
+        await _sendMail(
           to: event.attendeeEmail!,
           subject: 'Anulare: ${event.title}',
           body:
