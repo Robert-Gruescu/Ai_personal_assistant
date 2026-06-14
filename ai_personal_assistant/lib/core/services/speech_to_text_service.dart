@@ -43,6 +43,7 @@ class SpeechToTextService {
   Function(String error)? onError;
   Function()? onListeningStarted;
   Function()? onListeningStopped;
+  Function(double level)? onSoundLevel; // nivelul de sunet brut de la microfon
 
   bool get isInitialized => _isInitialized;
   bool get isListening => _isListening;
@@ -122,6 +123,7 @@ class SpeechToTextService {
         partialResults: true,
         cancelOnError: true,
         listenMode: ListenMode.dictation,
+        onSoundLevelChange: (level) => onSoundLevel?.call(level),
       );
 
       _isListening = true;

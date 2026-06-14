@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'screens/home_screen_local.dart';
+import 'screens/root_screen.dart';
 import 'core/services/database_service.dart';
 import 'core/services/widget_service.dart';
 
@@ -41,7 +41,7 @@ class MyApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const HomeScreen(),
+      home: const RootScreen(),
     );
   }
 }

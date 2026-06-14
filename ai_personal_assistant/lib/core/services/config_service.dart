@@ -21,6 +21,7 @@ class ConfigService {
   static const String _keyTheme = 'theme';
   static const String _keyTtsRate = 'tts_rate';
   static const String _keyTtsVolume = 'tts_volume';
+  static const String _keyScreenMode = 'screen_mode';
 
   // Default values
   static const String defaultSmtpHost = 'smtp.gmail.com';
@@ -31,6 +32,7 @@ class ConfigService {
   static const String defaultTheme = 'light';
   static const double defaultTtsRate = 0.5;
   static const double defaultTtsVolume = 1.0;
+  static const String defaultScreenMode = 'voice'; // 'voice' | 'chat'
 
   /// Initialize the config service
   Future<void> initialize() async {
@@ -172,6 +174,19 @@ class ConfigService {
   Future<void> setTtsVolume(double volume) async {
     await _ensureInitialized();
     await _prefs?.setDouble(_keyTtsVolume, volume);
+  }
+
+  // ============ SCREEN MODE (voce / chat) ============
+
+  /// Modul de ecran preferat: 'voice' (voice-first) sau 'chat' (clasic).
+  Future<String> get screenMode async {
+    await _ensureInitialized();
+    return _prefs?.getString(_keyScreenMode) ?? defaultScreenMode;
+  }
+
+  Future<void> setScreenMode(String mode) async {
+    await _ensureInitialized();
+    await _prefs?.setString(_keyScreenMode, mode);
   }
 
   // ============ EMAIL CONFIG HELPER ============
