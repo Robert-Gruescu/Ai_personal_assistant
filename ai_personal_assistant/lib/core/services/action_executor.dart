@@ -775,18 +775,16 @@ class ActionExecutor {
 
   Future<ActionResult> _getDiscounts(Map<String, dynamic> data) async {
     try {
-      final rawStores = data['stores'];
-      final List<String>? stores = rawStores is List
-          ? rawStores.map((e) => e.toString()).toList()
-          : null;
+      // Sursa = magazinul propriu (un singur magazin), deci `stores` nu se aplică.
       final forceRefresh = data['force_refresh'] == true;
 
       final shoppingItems = await _db.getAllShoppingItems(purchased: false);
       final shoppingNames = shoppingItems.map((i) => i.name).toList();
 
-      final result = await _discounts.getDiscounts(
+      // Sursa reducerilor = site-ul propriu (endpoint /api/reduceri), nu mooldo.
+      // `stores` nu se mai aplică (avem o singură sursă — magazinul nostru).
+      final result = await _discounts.getSiteDiscounts(
         shoppingListItems: shoppingNames,
-        stores: stores,
         forceRefresh: forceRefresh,
       );
 
@@ -818,6 +816,15 @@ class ActionExecutor {
               .where((r) => r.error == null)
               .map((r) => r.store)
               .toList(),
+          // Link către pagina de reduceri (apare în popup-ul de linkuri).
+          'product_links': [
+            {
+              'label': 'Vezi toate reducerile',
+              'subtitle': 'magazinul tău',
+              'url': 'https://magazin-online-five.vercel.app/reduceri',
+              'source': 'shop',
+            },
+          ],
         },
       );
     } catch (e) {

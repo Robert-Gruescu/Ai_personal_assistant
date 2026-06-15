@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -215,6 +216,126 @@ class DiscountService {
     } catch (e) {
       print('DiscountService error: $e');
       return DiscountResponse.error('Eroare la căutarea reducerilor: $e');
+    }
+  }
+
+  // ── REDUCERI DE PE SITE (endpoint /api/reduceri) ─────────────────────────────
+  //
+  // Citește reducerile DE PE SITE-ul propriu (funcția serverless care expune
+  // tabelul weekly_deals), NU direct din baza de date și NU prin scraping.
+  // Înlocuiește sursa mooldo.ro.
+
+  static const String _siteDiscountsUrl =
+      'https://magazin-online-five.vercel.app/api/reduceri';
+
+  List<DiscountItem>? _siteCache;
+  DateTime? _siteCacheAt;
+  static const Duration _siteCacheTtl = Duration(minutes: 10);
+
+  Future<DiscountResponse> getSiteDiscounts({
+    List<String> shoppingListItems = const [],
+    bool forceRefresh = false,
+  }) async {
+    final normalizedList =
+        shoppingListItems.map(_normalize).where((e) => e.isNotEmpty).toList();
+
+    try {
+      final items = await _fetchSiteDeals(forceRefresh: forceRefresh);
+      if (items.isEmpty) {
+        return DiscountResponse(
+          success: true,
+          storeResults: const [],
+          prioritizedItems: const [],
+          otherItems: const [],
+        );
+      }
+
+      final prioritized = <DiscountItem>[];
+      final others = <DiscountItem>[];
+      for (final item in items) {
+        final nameNorm = _normalize(item.name);
+        final matches = normalizedList.isNotEmpty &&
+            normalizedList.any((s) => _fuzzyMatch(nameNorm, s));
+        (matches ? prioritized : others).add(item);
+      }
+      prioritized.sort(_byDiscount);
+      others.sort(_byDiscount);
+
+      return DiscountResponse(
+        success: true,
+        storeResults: [
+          StoreDiscountResult(
+            store: 'Magazinul tău',
+            allDiscounts: items,
+            matchingShoppingList: prioritized,
+          ),
+        ],
+        prioritizedItems: prioritized,
+        otherItems: others,
+      );
+    } catch (e) {
+      print('Site discounts error: $e');
+      return DiscountResponse.error('Eroare la citirea reducerilor: $e');
+    }
+  }
+
+  Future<List<DiscountItem>> _fetchSiteDeals({bool forceRefresh = false}) async {
+    final now = DateTime.now();
+    if (!forceRefresh &&
+        _siteCache != null &&
+        _siteCacheAt != null &&
+        now.difference(_siteCacheAt!) < _siteCacheTtl) {
+      return _siteCache!;
+    }
+
+    final resp = await http
+        .get(Uri.parse(_siteDiscountsUrl), headers: _headers)
+        .timeout(const Duration(seconds: 15));
+    if (resp.statusCode != 200) {
+      print('Site reduceri: HTTP ${resp.statusCode}');
+      return _siteCache ?? [];
+    }
+
+    final data = jsonDecode(resp.body);
+    if (data is! List) return [];
+
+    final items = <DiscountItem>[];
+    for (final raw in data) {
+      if (raw is! Map) continue;
+      final name = (raw['name'] ?? '').toString().trim();
+      if (name.isEmpty) continue;
+      final price = raw['price'];
+      final oldPrice = raw['old_price'];
+      final percent = raw['discount_percent'];
+      items.add(DiscountItem(
+        name: name,
+        store: 'Magazinul tău',
+        originalPrice: oldPrice != null ? '${_fmtPrice(oldPrice)} lei' : null,
+        discountedPrice: price != null ? '${_fmtPrice(price)} lei' : null,
+        discountPercent: percent?.toString(),
+        validUntil: _formatValid(raw['valid_until']),
+        category: raw['category']?.toString(),
+        fetchedAt: now,
+      ));
+    }
+    _siteCache = items;
+    _siteCacheAt = now;
+    return items;
+  }
+
+  String _fmtPrice(dynamic v) {
+    final d = (v is num) ? v.toDouble() : double.tryParse(v.toString());
+    return d != null ? d.toStringAsFixed(2) : v.toString();
+  }
+
+  String? _formatValid(dynamic v) {
+    if (v == null) return null;
+    final d = DateTime.tryParse(v.toString());
+    if (d == null) return v.toString();
+    try {
+      return DateFormat('d MMMM yyyy', 'ro').format(d);
+    } catch (_) {
+      return v.toString();
     }
   }
 
