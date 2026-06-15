@@ -6,6 +6,7 @@ import '../models/task.dart';
 import '../models/shopping_item.dart';
 import '../models/calendar_event.dart';
 import '../models/agent_action.dart';
+import '../models/memory_item.dart';
 
 /// Database service for local data storage using Hive
 class DatabaseService {
@@ -18,6 +19,7 @@ class DatabaseService {
   static const String _shoppingBox = 'shopping';
   static const String _calendarBox = 'calendar';
   static const String _actionsBox = 'actions';
+  static const String _memoriesBox = 'memories';
 
   final _uuid = const Uuid();
 
@@ -48,6 +50,9 @@ class DatabaseService {
     if (!Hive.isAdapterRegistered(5)) {
       Hive.registerAdapter(AgentActionAdapter());
     }
+    if (!Hive.isAdapterRegistered(6)) {
+      Hive.registerAdapter(MemoryItemAdapter());
+    }
 
     // Open boxes
     await Hive.openBox<Conversation>(_conversationsBox);
@@ -55,6 +60,7 @@ class DatabaseService {
     await Hive.openBox<ShoppingItem>(_shoppingBox);
     await Hive.openBox<CalendarEvent>(_calendarBox);
     await Hive.openBox<AgentAction>(_actionsBox);
+    await Hive.openBox<MemoryItem>(_memoriesBox);
 
     _isInitialized = true;
     print('✅ Database initialized');
@@ -105,8 +111,27 @@ class DatabaseService {
     }
   }
 
+  Future<void> updateConversationTitle(String id, String title) async {
+    final conversation = _conversationsBoxInstance.get(id);
+    if (conversation != null) {
+      conversation.title = title;
+      conversation.updatedAt = DateTime.now();
+      await conversation.save();
+    }
+  }
+
   Future<void> deleteConversation(String id) async {
     await _conversationsBoxInstance.delete(id);
+  }
+
+  /// Limitează numărul de conversații păstrate (șterge cele mai vechi peste prag).
+  /// Conversațiile sunt doar text → ocupă foarte puțin, dar evităm acumularea infinită.
+  Future<void> pruneConversations({int keep = 50}) async {
+    final all = await getAllConversations(); // sortate desc după updatedAt
+    if (all.length <= keep) return;
+    for (final old in all.sublist(keep)) {
+      await _conversationsBoxInstance.delete(old.id);
+    }
   }
 
   // ============ TASKS ============
@@ -377,6 +402,125 @@ class DatabaseService {
     await action.save();
   }
 
+  // ============ MEMORIES (memorie de lungă durată) ============
+
+  Box<MemoryItem> get _memoriesBoxInstance =>
+      Hive.box<MemoryItem>(_memoriesBox);
+
+  /// Salvează un fapt nou. Dacă există deja unul foarte asemănător
+  /// (același conținut, indiferent de majuscule), îl actualizează în loc să dubleze.
+  Future<MemoryItem> createMemory({
+    required String content,
+    String? category,
+    List<String>? keywords,
+  }) async {
+    final normalized = content.trim().toLowerCase();
+    MemoryItem? existing;
+    for (final m in _memoriesBoxInstance.values) {
+      if (m.content.trim().toLowerCase() == normalized) {
+        existing = m;
+        break;
+      }
+    }
+    if (existing != null) {
+      existing.category = category ?? existing.category;
+      if (keywords != null) existing.keywords = keywords;
+      existing.updatedAt = DateTime.now();
+      await existing.save();
+      return existing;
+    }
+
+    final memory = MemoryItem(
+      id: generateId(),
+      content: content.trim(),
+      category: category,
+      keywords: keywords ?? _extractKeywords(content),
+    );
+    await _memoriesBoxInstance.put(memory.id, memory);
+    return memory;
+  }
+
+  Future<List<MemoryItem>> getAllMemories() async {
+    final memories = _memoriesBoxInstance.values.toList();
+    memories.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return memories;
+  }
+
+  /// Întoarce memoriile cele mai relevante pentru un text dat (potrivire pe
+  /// cuvinte-cheie, fără AI). Dacă sunt puține memorii în total, le întoarce pe toate.
+  Future<List<MemoryItem>> findRelevantMemories(
+    String query, {
+    int limit = 8,
+  }) async {
+    final all = await getAllMemories();
+    if (all.length <= limit) return all;
+
+    final queryWords = _extractKeywords(query).toSet();
+    if (queryWords.isEmpty) return all.take(limit).toList();
+
+    int score(MemoryItem m) {
+      final words = {
+        ...m.keywords.map((k) => k.toLowerCase()),
+        ..._extractKeywords(m.content),
+      };
+      return queryWords.where(words.contains).length;
+    }
+
+    final scored = all.map((m) => MapEntry(m, score(m))).toList();
+    scored.sort((a, b) {
+      final byScore = b.value.compareTo(a.value);
+      if (byScore != 0) return byScore;
+      return b.key.updatedAt.compareTo(a.key.updatedAt);
+    });
+
+    final relevant = scored.where((e) => e.value > 0).map((e) => e.key).toList();
+    // Dacă nimic nu se potrivește pe cuvinte, întoarce cele mai recente memorii.
+    final result = relevant.isNotEmpty ? relevant : all;
+    return result.take(limit).toList();
+  }
+
+  Future<MemoryItem?> findMemoryByContent(String query) async {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return null;
+    final words = _extractKeywords(query).toSet();
+    MemoryItem? best;
+    int bestScore = 0;
+    for (final m in _memoriesBoxInstance.values) {
+      final content = m.content.toLowerCase();
+      if (content.contains(q)) return m; // potrivire directă
+      final mWords = {
+        ...m.keywords.map((k) => k.toLowerCase()),
+        ..._extractKeywords(m.content),
+      };
+      final s = words.where(mWords.contains).length;
+      if (s > bestScore) {
+        bestScore = s;
+        best = m;
+      }
+    }
+    return bestScore > 0 ? best : null;
+  }
+
+  Future<void> deleteMemory(String id) async {
+    await _memoriesBoxInstance.delete(id);
+  }
+
+  /// Extrage cuvinte-cheie simple dintr-un text (elimină cuvintele uzuale scurte).
+  List<String> _extractKeywords(String text) {
+    const stopWords = {
+      'sa', 'să', 'si', 'și', 'sau', 'la', 'pe', 'in', 'în', 'de', 'cu', 'un',
+      'o', 'al', 'a', 'ale', 'este', 'sunt', 'eu', 'tu', 'el', 'ea', 'meu',
+      'mea', 'mei', 'mele', 'ca', 'că', 'ce', 'care', 'pentru', 'din', 'ține',
+      'minte', 'tine', 'am', 'ai', 'are', 'mi', 'imi', 'îmi', 'se', 'ne',
+    };
+    return text
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-zăâîșț0-9\s]'), ' ')
+        .split(RegExp(r'\s+'))
+        .where((w) => w.length >= 3 && !stopWords.contains(w))
+        .toList();
+  }
+
   // ============ UTILITY ============
 
   Future<void> clearAllData() async {
@@ -385,6 +529,7 @@ class DatabaseService {
     await _shoppingBoxInstance.clear();
     await _calendarBoxInstance.clear();
     await _actionsBoxInstance.clear();
+    await _memoriesBoxInstance.clear();
   }
 
   Future<void> close() async {

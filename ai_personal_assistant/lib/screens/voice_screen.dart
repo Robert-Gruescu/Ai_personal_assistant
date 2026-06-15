@@ -113,6 +113,11 @@ class _VoiceScreenState extends State<VoiceScreen>
   Future<void> _toggleMic() async {
     if (!_ready) return;
 
+    // Cât timp procesăm răspunsul AI, ignorăm apăsările pe microfon, ca să nu
+    // pornim o ascultare nouă peste cererea în curs (ar suprapune STT cu TTS-ul
+    // care urmează). Revenirea din „processing” se face automat în _handleResult.
+    if (_state == VoiceState.processing) return;
+
     // Dacă vorbește acum, oprește vocea și revino în repaus.
     if (_state == VoiceState.speaking) {
       await _service.stopSpeaking();
@@ -162,6 +167,10 @@ class _VoiceScreenState extends State<VoiceScreen>
   @override
   void dispose() {
     _anim.dispose();
+    // STT/TTS sunt Singleton partajate cu ecranul Chat — nu le închidem aici,
+    // doar oprim orice activitate în curs la părăsirea ecranului.
+    _stt.stopListening();
+    _tts.stop();
     super.dispose();
   }
 

@@ -13,8 +13,16 @@ class Session {
   String title;
   List<Message> messages;
 
-  Session({required this.id, required this.title, List<Message>? messages})
-    : messages = messages ?? [];
+  /// Mesajele acestei conversații au fost încărcate din baza de date?
+  /// (lazy loading — încărcăm mesajele doar când conversația e deschisă).
+  bool loaded;
+
+  Session({
+    required this.id,
+    required this.title,
+    List<Message>? messages,
+    this.loaded = false,
+  }) : messages = messages ?? [];
 }
 
 class Message {
@@ -83,17 +91,76 @@ class _HomeScreenState extends State<HomeScreen>
     _initializeServices();
   }
 
+  Message _welcomeMessage() => Message(
+    text:
+        'Salut! Sunt ASIS, asistentul tău personal vocal. Totul rulează local pe telefon! Cum te pot ajuta?',
+    isUser: false,
+  );
+
   void _createInitialSession() {
-    final s = Session(id: _generateUUID(), title: 'Conversație Nouă');
-    s.messages.add(
-      Message(
-        text:
-            'Salut! Sunt ASIS, asistentul tău personal vocal. Totul rulează local pe telefon! Cum te pot ajuta?',
-        isUser: false,
-      ),
+    final s = Session(
+      id: _generateUUID(),
+      title: 'Conversație Nouă',
+      messages: [_welcomeMessage()],
+      loaded: true,
     );
     sessions.add(s);
     sessionId = s.id;
+  }
+
+  /// Încarcă din baza de date lista conversațiilor salvate (lazy: doar titlurile;
+  /// mesajele se încarcă la deschiderea fiecărei conversații). Se apelează după
+  /// inițializarea serviciilor (deci baza de date e gata).
+  Future<void> _loadSessions() async {
+    try {
+      final list = await _service.getConversationList();
+
+      // Sesiunile salvate (lazy: doar titlurile, fără mesaje) pentru bara laterală.
+      final saved = list
+          .map(
+            (c) => Session(
+              id: c['id'] as String,
+              title: (c['title'] as String?) ?? 'Conversație',
+              loaded: false,
+            ),
+          )
+          .toList();
+
+      // COMPORTAMENT: la pornirea aplicației deschidem MEREU o conversație nouă
+      // (nu ultima conversație). Conversațiile vechi rămân accesibile în bara
+      // laterală. Dacă cea mai recentă e deja goală (o conversație nouă
+      // neîncepută), o refolosim — ca să nu acumulăm conversații goale la
+      // fiecare pornire.
+      final bool firstIsEmpty =
+          saved.isNotEmpty && ((list.first['message_count'] as int?) ?? 0) == 0;
+
+      if (firstIsEmpty) {
+        final active = saved.first;
+        active.messages = [_welcomeMessage()];
+        active.loaded = true;
+        await _service.switchConversation(active.id);
+        if (!mounted) return;
+        setState(() {
+          sessions = saved;
+          sessionId = active.id;
+        });
+      } else {
+        final newId = await _service.createConversation(title: 'Conversație Nouă');
+        final newSession = Session(
+          id: newId,
+          title: 'Conversație Nouă',
+          messages: [_welcomeMessage()],
+          loaded: true,
+        );
+        if (!mounted) return;
+        setState(() {
+          sessions = [newSession, ...saved];
+          sessionId = newId;
+        });
+      }
+    } catch (e) {
+      // În caz de eroare, păstrăm conversația-placeholder locală.
+    }
   }
 
   Future<void> _initializeServices() async {
@@ -101,6 +168,9 @@ class _HomeScreenState extends State<HomeScreen>
 
     try {
       await _service.initialize();
+
+      // Încarcă conversațiile salvate din baza de date locală.
+      await _loadSessions();
 
       final apiKey = await _config.geminiApiKey;
       isApiKeyConfigured = apiKey != null && apiKey.isNotEmpty;
@@ -155,8 +225,11 @@ class _HomeScreenState extends State<HomeScreen>
     _textController.dispose();
     _apiKeyController.dispose();
     _scrollController.dispose();
-    _stt.dispose();
-    _tts.dispose();
+    // NU apelăm dispose() pe STT/TTS: sunt servicii Singleton partajate cu
+    // ecranul Voce (le-ar închide motorul și pentru celălalt ecran). Doar oprim
+    // orice activitate în curs când părăsim ecranul.
+    _stt.stopListening();
+    _tts.stop();
     super.dispose();
   }
 
@@ -192,37 +265,65 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   // ── Session management ─────────────────────────────────────────────────────
-  void _createNewSession() {
-    final newId = _generateUUID();
-    final s = Session(id: newId, title: 'Conversație Nouă');
-    s.messages.add(
-      Message(text: 'Sesiune nouă! Cum te pot ajuta?', isUser: false),
-    );
+  Future<void> _createNewSession() async {
+    // Evită acumularea de conversații goale: dacă cea curentă nu are mesaje
+    // de la utilizator, o refolosim în loc să creăm alta.
+    if (sessions.isNotEmpty && !_currentSession.messages.any((m) => m.isUser)) {
+      setState(() => statusText = 'Folosește conversația curentă (goală).');
+      return;
+    }
+
+    final newId = await _service.createConversation(title: 'Conversație Nouă');
+    if (!mounted) return;
     setState(() {
-      sessions.insert(0, s);
+      sessions.insert(
+        0,
+        Session(
+          id: newId,
+          title: 'Conversație Nouă',
+          messages: [_welcomeMessage()],
+          loaded: true,
+        ),
+      );
       sessionId = newId;
       statusText = 'Sesiune nouă creată.';
     });
-    _service.clearHistory();
   }
 
-  void _switchSession(String id) {
+  Future<void> _switchSession(String id) async {
+    await _service.switchConversation(id);
+
+    // Lazy: încarcă mesajele conversației doar la prima deschidere.
+    final s = sessions.firstWhere((x) => x.id == id);
+    if (!s.loaded) {
+      final msgs = await _service.getConversationMessages(id);
+      s.messages = msgs
+          .map((m) => Message(text: m['content'] ?? '', isUser: m['role'] == 'user'))
+          .toList();
+      if (s.messages.isEmpty) s.messages.add(_welcomeMessage());
+      s.loaded = true;
+    }
+
+    if (!mounted) return;
     setState(() {
       sessionId = id;
       statusText = 'Am schimbat conversația.';
     });
-    _service.clearHistory();
+    _scrollToBottom();
   }
 
-  void _deleteSession(String id) {
-    setState(() {
-      sessions.removeWhere((s) => s.id == id);
-      if (sessionId == id && sessions.isNotEmpty) {
-        sessionId = sessions.first.id;
-      } else if (sessions.isEmpty) {
-        _createInitialSession();
+  Future<void> _deleteSession(String id) async {
+    await _service.deleteConversation(id);
+    if (!mounted) return;
+    setState(() => sessions.removeWhere((s) => s.id == id));
+
+    if (sessionId == id) {
+      if (sessions.isNotEmpty) {
+        await _switchSession(sessions.first.id);
+      } else {
+        await _createNewSession();
       }
-    });
+    }
   }
 
   // ── Voice ──────────────────────────────────────────────────────────────────
@@ -275,6 +376,7 @@ class _HomeScreenState extends State<HomeScreen>
         _currentSession.title = text.length > 30
             ? '${text.substring(0, 30)}...'
             : text;
+        _service.updateConversationTitle(sessionId, _currentSession.title);
       }
     });
     _scrollToBottom();
@@ -323,6 +425,7 @@ class _HomeScreenState extends State<HomeScreen>
         _currentSession.title = text.length > 30
             ? '${text.substring(0, 30)}...'
             : text;
+        _service.updateConversationTitle(sessionId, _currentSession.title);
       }
     });
     _scrollToBottom();
@@ -966,7 +1069,10 @@ class _HomeScreenState extends State<HomeScreen>
         const SizedBox(height: 20),
 
         ElevatedButton.icon(
-          onPressed: _createNewSession,
+          onPressed: () {
+            Navigator.pop(context); // închide bara laterală automat
+            _createNewSession();
+          },
           icon: const Icon(Icons.add),
           label: const Text('Conversație Nouă'),
           style: ElevatedButton.styleFrom(
@@ -1013,7 +1119,10 @@ class _HomeScreenState extends State<HomeScreen>
                     icon: const Icon(Icons.delete_outline, size: 18),
                     onPressed: () => _deleteSession(s.id),
                   ),
-                  onTap: () => _switchSession(s.id),
+                  onTap: () {
+                    Navigator.pop(context); // închide bara laterală automat
+                    _switchSession(s.id);
+                  },
                 ),
               );
             },

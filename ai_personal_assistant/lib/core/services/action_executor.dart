@@ -78,6 +78,9 @@ class ActionExecutor {
       'cancel_calendar_event': _cancelCalendarEvent,
       'get_discounts': _getDiscounts,
       'summarize_email': _summarizeEmail,
+      'remember': _remember,
+      'recall_memory': _recallMemory,
+      'forget_memory': _forgetMemory,
     };
 
     final handler = handlers[intent];
@@ -203,6 +206,98 @@ class ActionExecutor {
       return ActionResult.success('Task-ul "${task.title}" a fost șters.');
     } catch (e) {
       return ActionResult.error('Eroare la ștergerea task-ului: $e');
+    }
+  }
+
+  // ============ MEMORY ACTIONS (memorie de lungă durată) ============
+
+  Future<ActionResult> _remember(Map<String, dynamic> data) async {
+    try {
+      // Acceptă fie un singur fapt, fie mai multe.
+      final List<String> contents = [];
+      if (data['facts'] is List) {
+        for (final f in (data['facts'] as List)) {
+          if (f is String && f.trim().isNotEmpty) {
+            contents.add(f.trim());
+          } else if (f is Map && f['content'] is String) {
+            contents.add((f['content'] as String).trim());
+          }
+        }
+      } else if (data['content'] is String) {
+        contents.add((data['content'] as String).trim());
+      } else if (data['fact'] is String) {
+        contents.add((data['fact'] as String).trim());
+      }
+
+      if (contents.isEmpty) {
+        return ActionResult.error('Nu am înțeles ce să țin minte.');
+      }
+
+      final saved = <String>[];
+      for (final c in contents) {
+        final mem = await _db.createMemory(
+          content: c,
+          category: data['category'] as String?,
+        );
+        saved.add(mem.content);
+      }
+      await _db.logAction(
+        actionType: 'remember',
+        content: saved.join(' | '),
+      );
+
+      return ActionResult.success(
+        saved.length == 1
+            ? 'Am reținut: ${saved.first}'
+            : 'Am reținut ${saved.length} lucruri.',
+        data: {'count': saved.length, 'memories': saved},
+      );
+    } catch (e) {
+      return ActionResult.error('Eroare la salvarea în memorie: $e');
+    }
+  }
+
+  Future<ActionResult> _recallMemory(Map<String, dynamic> data) async {
+    try {
+      final query = (data['query'] as String?)?.trim() ?? '';
+      final memories = query.isEmpty
+          ? await _db.getAllMemories()
+          : await _db.findRelevantMemories(query);
+
+      if (memories.isEmpty) {
+        return ActionResult.success(
+          'Nu am reținut încă nimic despre tine.',
+          data: {'count': 0, 'memories': <String>[]},
+        );
+      }
+
+      final list = memories.map((m) => m.content).toList();
+      return ActionResult.success(
+        'Iată ce știu: ${list.join('; ')}.',
+        data: {'count': list.length, 'memories': list},
+      );
+    } catch (e) {
+      return ActionResult.error('Eroare la accesarea memoriei: $e');
+    }
+  }
+
+  Future<ActionResult> _forgetMemory(Map<String, dynamic> data) async {
+    try {
+      final query = (data['query'] as String?)?.trim() ??
+          (data['content'] as String?)?.trim() ??
+          '';
+      if (query.isEmpty) {
+        return ActionResult.error('Nu am înțeles ce să uit.');
+      }
+      final target = await _db.findMemoryByContent(query);
+      if (target == null) {
+        return ActionResult.error('Nu am găsit nimic de uitat despre „$query”.');
+      }
+      final content = target.content;
+      await _db.deleteMemory(target.id);
+      return ActionResult.success('Am uitat: $content');
+    } catch (e) {
+      return ActionResult.error('Eroare la ștergerea din memorie: $e');
     }
   }
 

@@ -4,3 +4,4 @@ export 'task.dart';
 export 'shopping_item.dart';
 export 'calendar_event.dart';
 export 'agent_action.dart';
+export 'memory_item.dart';

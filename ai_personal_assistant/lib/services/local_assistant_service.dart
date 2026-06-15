@@ -279,7 +279,7 @@ class LocalAssistantService {
     try {
       print('💬 Processing message: $message');
 
-      final persistentContext = await _buildPersistentContext();
+      final persistentContext = await _buildPersistentContext(message);
 
       // Get AI response
       final aiResult = await _gemini.chat(
@@ -367,19 +367,26 @@ class LocalAssistantService {
         );
       }
 
-      // Save to database
-      if (_currentConversationId != null) {
-        await _db.addMessageToConversation(
-          _currentConversationId!,
-          'user',
-          message,
-        );
-        await _db.addMessageToConversation(
-          _currentConversationId!,
-          'assistant',
-          responseText,
-        );
+      // Save to database. Dacă nu există o conversație activă (ex. în modul Voce),
+      // creăm automat una, ca discuția să fie persistată și vizibilă în chat.
+      if (_currentConversationId == null) {
+        final title = message.length > 30
+            ? '${message.substring(0, 30)}...'
+            : message;
+        final conversation = await _db.createConversation(title: title);
+        _currentConversationId = conversation.id;
+        await _db.pruneConversations(keep: 50);
       }
+      await _db.addMessageToConversation(
+        _currentConversationId!,
+        'user',
+        message,
+      );
+      await _db.addMessageToConversation(
+        _currentConversationId!,
+        'assistant',
+        responseText,
+      );
 
       return ChatResponse(
         response: responseText,
@@ -620,6 +627,18 @@ class LocalAssistantService {
         final eventTitles = events.map((e) => e['title']).join(', ');
         return 'Ai următoarele evenimente: $eventTitles.';
 
+      case 'recall_memory':
+        final memories = data['memories'] as List? ?? [];
+        if (memories.isEmpty) return 'Nu am reținut încă nimic despre tine.';
+        return 'Iată ce știu despre tine: ${memories.join('; ')}.';
+
+      case 'remember':
+      case 'forget_memory':
+        // Păstrează confirmarea naturală formulată de AI, dacă există.
+        return originalResponse.trim().isNotEmpty
+            ? originalResponse
+            : (result.message ?? originalResponse);
+
       case 'search_internet':
         final directAnswer = data['direct_answer'] as String?;
         final results = data['results'] as List? ?? [];
@@ -744,7 +763,7 @@ class LocalAssistantService {
     }
   }
 
-  Future<String> _buildPersistentContext() async {
+  Future<String> _buildPersistentContext([String? userMessage]) async {
     try {
       final tasks = await _db.getAllTasks(completed: false);
       final shoppingItems = await _db.getAllShoppingItems(purchased: false);
@@ -760,12 +779,22 @@ class LocalAssistantService {
                 .map((i) => '${i.name} (${i.quantity})')
                 .join(', ');
 
+      // Memorie de lungă durată: faptele relevante pentru mesajul curent
+      // (sau toate, dacă sunt puține). Fără apel AI suplimentar.
+      final memories = await _db.findRelevantMemories(userMessage ?? '');
+      final memorySummary = memories.isEmpty
+          ? 'Nimic reținut încă.'
+          : memories.map((m) => '- ${m.content}').join('\n');
+
       return '''
 CONTEXT PERSISTENT DIN APLICAȚIE (actual, din baza locală):
 - Task-uri active (${tasks.length}): $taskSummary
 - Produse de cumpărat (${shoppingItems.length}): $shoppingSummary
 
-Regulă: dacă utilizatorul întreabă ce are pe liste, folosește acest context actual fără să ceri repetarea informațiilor.
+MEMORIE (fapte reținute despre utilizator):
+$memorySummary
+
+Regulă: dacă utilizatorul întreabă ce are pe liste, folosește acest context actual fără să ceri repetarea informațiilor. Folosește faptele din MEMORIE ca să personalizezi răspunsurile, fără să întrebi lucruri pe care le știi deja.
 ''';
     } catch (e) {
       return 'CONTEXT PERSISTENT indisponibil momentan: $e';
@@ -836,6 +865,8 @@ Regulă: dacă utilizatorul întreabă ce are pe liste, folosește acest context
     final conversation = await _db.createConversation(title: title);
     _currentConversationId = conversation.id;
     _conversationHistory.clear();
+    // Păstrează cel mult 50 de conversații (text-only, ocupă foarte puțin).
+    await _db.pruneConversations(keep: 50);
     return conversation.id;
   }
 
@@ -851,6 +882,42 @@ Regulă: dacă utilizatorul întreabă ce are pe liste, folosește acest context
 
   Future<List<Conversation>> getConversations() async {
     return await _db.getAllConversations();
+  }
+
+  /// Listă ușoară de conversații pentru bara laterală (fără a încărca mesajele în UI).
+  Future<List<Map<String, dynamic>>> getConversationList() async {
+    final convos = await _db.getAllConversations();
+    return convos
+        .map(
+          (c) => {
+            'id': c.id,
+            'title': c.title,
+            'updated_at': c.updatedAt.toIso8601String(),
+            'message_count': c.messages.length,
+          },
+        )
+        .toList();
+  }
+
+  /// Mesajele unei conversații (încărcate la cerere, când e deschisă).
+  Future<List<Map<String, String>>> getConversationMessages(String id) async {
+    final c = await _db.getConversation(id);
+    if (c == null) return [];
+    return c.messages
+        .map((m) => {'role': m.role, 'content': m.content})
+        .toList();
+  }
+
+  Future<void> deleteConversation(String id) async {
+    await _db.deleteConversation(id);
+    if (_currentConversationId == id) {
+      _currentConversationId = null;
+      _conversationHistory.clear();
+    }
+  }
+
+  Future<void> updateConversationTitle(String id, String title) async {
+    await _db.updateConversationTitle(id, title);
   }
 
   Future<bool> checkHealth() async {
