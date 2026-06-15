@@ -155,6 +155,8 @@ class _VoiceScreenState extends State<VoiceScreen>
     setState(() => _setState(VoiceState.processing, 'Mă gândesc...'));
     try {
       final response = await _service.sendMessage(text);
+      // Popup cu linkuri de produs (dacă a fost o căutare cu rezultate).
+      if (mounted) showProductLinksIfAny(context, response.action);
       // TTS.onStart va comuta în starea „speaking”.
       await _service.speak(response.response);
       // Dacă din vreun motiv TTS nu pornește, revenim în repaus.

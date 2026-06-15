@@ -395,6 +395,8 @@ class _HomeScreenState extends State<HomeScreen>
         statusText = '🎤 Apasă pe microfon pentru a continua';
       });
       _scrollToBottom();
+      // Popup cu linkuri de produs (dacă a fost o căutare cu rezultate).
+      if (mounted) showProductLinksIfAny(context, result.action);
       await _tts.speak(result.response);
     } catch (e) {
       setState(() {
@@ -444,6 +446,8 @@ class _HomeScreenState extends State<HomeScreen>
         statusText = '✅ Scrie un mesaj sau apasă pe microfon';
       });
       _scrollToBottom();
+      // Popup cu linkuri de produs (dacă a fost o căutare cu rezultate).
+      if (mounted) showProductLinksIfAny(context, result.action);
       await _tts.speak(result.response);
     } catch (e) {
       setState(() {

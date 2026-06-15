@@ -644,6 +644,12 @@ class ActionExecutor {
         flyerImages = await _search.findFlyerImageUrls(query, result.results);
       }
 
+      // Linkuri de produs pentru popup: 1-2 din magazin + 1 internet verificat.
+      final productLinks = await _search.buildProductLinks(
+        result,
+        productTerm: query,
+      );
+
       return ActionResult.success(
         'Am găsit informații despre "$query".',
         data: {
@@ -658,6 +664,7 @@ class ActionExecutor {
           if (pageContext.isNotEmpty) 'page_content': pageContext,
           if (catalogData != null) ...catalogData,
           if (flyerImages.isNotEmpty) 'catalog_images': flyerImages,
+          if (productLinks.isNotEmpty) 'product_links': productLinks,
         },
       );
     } catch (e) {

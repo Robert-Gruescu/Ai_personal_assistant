@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../core/services/database_service.dart';
 import '../core/models/models.dart';
 
@@ -441,4 +442,115 @@ class ShoppingTile extends StatelessWidget {
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Links Bottom Sheet (popup cu linkuri produs după o căutare)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Popup jos cu linkuri verificate către produs: din magazinul propriu (sursă
+/// 'shop') și de pe internet (sursă 'internet'). Partajat de Voce și Chat.
+/// `links` = listă de hărți {label, subtitle, url, source}.
+class LinksSheet extends StatelessWidget {
+  final List<Map<String, dynamic>> links;
+  const LinksSheet({super.key, required this.links});
+
+  Future<void> _open(BuildContext context, String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nu am putut deschide linkul.')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF20223A) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey.shade400,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              const Icon(Icons.link_rounded, color: Colors.indigo, size: 24),
+              const SizedBox(width: 8),
+              const Text(
+                'Linkuri produs',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.close_rounded),
+                tooltip: 'Închide',
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ...links.map((l) {
+            final isShop = (l['source'] ?? '') == 'shop';
+            return Card(
+              elevation: 0,
+              color: isDark ? Colors.white10 : Colors.grey.shade100,
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: ListTile(
+                leading: Icon(
+                  isShop ? Icons.storefront_rounded : Icons.public_rounded,
+                  color: isShop ? Colors.teal : Colors.indigo,
+                ),
+                title: Text(
+                  (l['label'] ?? '').toString(),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: Text(
+                  (l['subtitle'] ?? '').toString(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: const Icon(Icons.open_in_new_rounded, size: 18),
+                onTap: () => _open(context, (l['url'] ?? '').toString()),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+/// Afișează popup-ul de linkuri dacă există. Apelat din ambele ecrane după o
+/// căutare. `action` este map-ul de acțiune din răspuns (conține `product_links`).
+void showProductLinksIfAny(BuildContext context, Map<String, dynamic>? action) {
+  if (action == null) return;
+  final raw = action['product_links'];
+  if (raw is! List || raw.isEmpty) return;
+  final links = raw
+      .whereType<Map>()
+      .map((e) => e.map((k, v) => MapEntry(k.toString(), v)))
+      .toList();
+  if (links.isEmpty) return;
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (_) => LinksSheet(links: links),
+  );
 }

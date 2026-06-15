@@ -285,6 +285,11 @@ class SearchService {
 
   final Map<String, SearchResponse> _searchCache = {};
 
+  // Cache scurt al produselor din magazin (pentru căutarea locală pe tokeni).
+  List<ShopProduct>? _shopProductsCache;
+  DateTime? _shopProductsCacheAt;
+  static const Duration _shopCacheTtl = Duration(minutes: 5);
+
   bool get _serperConfigured =>
       _serperApiKey.isNotEmpty && _serperApiKey != 'PUNE_SERPER_API_KEY_AICI';
 
@@ -350,52 +355,211 @@ class SearchService {
 
   // ── MAGAZIN PROPRIU (Supabase) ────────────────────────────────────────────
 
+  /// Căutare în magazinul propriu (Supabase) — INDEPENDENTĂ de căutarea pe
+  /// internet. Nu mai folosește fraza brută ca substring (cum greșea înainte:
+  /// „cât costă o doză de coca cola în RO" nu se potrivea cu „Coca-Cola"). Acum:
+  ///   1. extrage cuvintele-cheie ale produsului din întrebare (scoate „cât
+  ///      costă / o / doză / în RO" etc.);
+  ///   2. aduce produsele (cache 5 min, magazinul e mic);
+  ///   3. le potrivește LOCAL, pe tokeni, normalizat (fără diacritice/cratime),
+  ///      bidirecțional — așa „coca cola", „Coca-Cola", „o doză de cola" găsesc
+  ///      toate „Coca-Cola". Adăugarea de produse noi nu cere nicio schimbare.
   Future<List<ShopProduct>> _searchInShop(String query) async {
-    try {
-      // Curăță query-ul pentru căutare
-      final cleanQuery = query
-          .toLowerCase()
-          .replaceAll(
-            RegExp(
-              r'(preț|pret|costa|costă|cât face|cat face|cat costa|cât costă|la|din|magazin)',
-              caseSensitive: false,
-            ),
-            '',
-          )
-          .trim();
+    final tokens = _productTokens(query);
+    if (tokens.isEmpty) return [];
 
-      if (cleanQuery.isEmpty) return [];
+    final products = await _getCachedShopProducts();
+    if (products.isEmpty) return [];
 
-      // Supabase full-text search cu ilike pentru căutare parțială
-      final uri = Uri.parse(
-        '$_supabaseUrl/products?select=id,name,description,price,image_url,category_id,fara_zahar,bio,stock'
-        '&name=ilike.*${Uri.encodeComponent(cleanQuery)}*'
-        '&order=name',
+    final matches = _matchShopProducts(products, query, tokens);
+    if (matches.isNotEmpty) {
+      print(
+        '✅ Supabase (local): ${matches.length} produse pentru "${tokens.join(' ')}"',
       );
+    }
+    return matches;
+  }
 
-      final response = await http
-          .get(
-            uri,
-            headers: {
-              'apikey': _supabaseAnonKey,
-              'Authorization': 'Bearer $_supabaseAnonKey',
-              'Content-Type': 'application/json',
-            },
-          )
-          .timeout(const Duration(seconds: 10));
+  /// Aduce toate produsele din magazin cu un cache scurt (evită un request la
+  /// fiecare căutare). Reutilizează `getAllShopProducts`.
+  Future<List<ShopProduct>> _getCachedShopProducts() async {
+    final now = DateTime.now();
+    if (_shopProductsCache != null &&
+        _shopProductsCacheAt != null &&
+        now.difference(_shopProductsCacheAt!) < _shopCacheTtl) {
+      return _shopProductsCache!;
+    }
+    final products = await getAllShopProducts();
+    if (products.isNotEmpty) {
+      _shopProductsCache = products;
+      _shopProductsCacheAt = now;
+    }
+    return products;
+  }
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as List;
-        final products = data.map((p) => ShopProduct.fromJson(p)).toList();
-        print('✅ Supabase: ${products.length} produse pentru "$cleanQuery"');
-        return products;
-      } else {
-        print('⚠️ Supabase error: ${response.statusCode}');
-        return [];
+  /// Extrage cuvintele-cheie relevante ale produsului dintr-o întrebare,
+  /// eliminând umplutura (preț, unități, articole, „în RO" etc.).
+  List<String> _productTokens(String query) {
+    const stop = {
+      'pret', 'preturi', 'costa', 'cost', 'cat', 'cata', 'cate', 'face',
+      'este', 'sunt', 'are', 'mult', 'multa', 'lei', 'ron', 'la', 'din', 'in',
+      'ro', 'romania', 'magazin', 'magazinul', 'un', 'o', 'de', 'despre',
+      'vreau', 'sa', 'imi', 'mi', 'spui', 'spune', 'cumpar', 'caut', 'gaseste',
+      'doza', 'doze', 'sticla', 'cutie', 'pachet', 'punga', 'bucata', 'buc',
+      'kg', 'gram', 'grame', 'litru', 'litri', 'cu', 'si', 'sau', 'ai',
+      'aveti', 'avem', 'pe', 'el', 'ea', 'cum',
+    };
+    return _normalizeShop(query)
+        .split(' ')
+        .where((w) => w.length >= 3 && !stop.contains(w))
+        .toList();
+  }
+
+  /// Potrivire locală pe tokeni, normalizată și bidirecțională.
+  List<ShopProduct> _matchShopProducts(
+    List<ShopProduct> products,
+    String query,
+    List<String> tokens,
+  ) {
+    final queryNorm = _normalizeShop(query);
+    final scored = <MapEntry<ShopProduct, int>>[];
+
+    for (final p in products) {
+      final nameNorm = _normalizeShop(p.name);
+      final nameTokens =
+          nameNorm.split(' ').where((w) => w.length >= 3).toList();
+
+      int score = 0;
+      // direcția 1: cuvintele din întrebare apar în numele produsului
+      // (ex. „coca", „cola" → „coca cola")
+      for (final t in tokens) {
+        if (nameNorm.contains(t)) score += 2;
       }
-    } catch (e) {
-      print('⚠️ Shop search error: $e');
-      return [];
+      // direcția 2: cuvintele din nume apar în întrebare
+      // (ex. „lapte" din numele produsului în „laptele" din întrebare)
+      for (final nt in nameTokens) {
+        if (queryNorm.contains(nt)) score += 2;
+      }
+      if (score > 0) scored.add(MapEntry(p, score));
+    }
+
+    scored.sort((a, b) {
+      final byScore = b.value.compareTo(a.value);
+      if (byScore != 0) return byScore;
+      // la scor egal, numele mai scurt e de regulă mai relevant
+      return a.key.name.length.compareTo(b.key.name.length);
+    });
+
+    return scored.take(5).map((e) => e.key).toList();
+  }
+
+  /// Normalizare pentru potrivire: minuscule, fără diacritice, fără cratime/
+  /// punctuație („Coca-Cola" → „coca cola").
+  String _normalizeShop(String text) => text
+      .toLowerCase()
+      .replaceAll(RegExp(r'[ăâ]'), 'a')
+      .replaceAll(RegExp(r'[îí]'), 'i')
+      .replaceAll(RegExp(r'[șş]'), 's')
+      .replaceAll(RegExp(r'[țţ]'), 't')
+      .replaceAll(RegExp(r'[^a-z0-9 ]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  // ── LINKURI PRODUS (pentru popup-ul de după căutare) ──────────────────────
+
+  /// URL-ul public al magazinului propriu (pagina unui produs: /produs/{id}).
+  static const String _storeBaseUrl = 'https://magazin-online-five.vercel.app';
+
+  /// Domenii de încredere pentru linkul de internet.
+  static const List<String> _trustedLinkDomains = [
+    'emag.ro', 'pret.ro', 'compari.ro', 'carrefour.ro', 'auchan.ro',
+    'mega-image.ro', 'kaufland.ro', 'lidl.ro', 'profi.ro',
+  ];
+
+  /// Construiește linkurile de produs pentru popup:
+  /// 1-2 din magazinul propriu (sigure, construite din `id`) +
+  /// 1 link de internet verificat (domeniu de încredere SAU accesibil, și
+  /// relevant — numele produsului apare în titlu).
+  Future<List<Map<String, dynamic>>> buildProductLinks(
+    SearchResponse resp, {
+    String? productTerm,
+  }) async {
+    final links = <Map<String, dynamic>>[];
+
+    for (final p in resp.shopProducts.take(2)) {
+      links.add({
+        'label': p.name,
+        'subtitle': '${p.price.toStringAsFixed(2)} lei — magazinul tău',
+        'url': '$_storeBaseUrl/produs/${p.id}',
+        'source': 'shop',
+      });
+    }
+
+    final internet = await _pickInternetLink(resp.results, productTerm);
+    if (internet != null) links.add(internet);
+
+    return links;
+  }
+
+  Future<Map<String, dynamic>?> _pickInternetLink(
+    List<SearchResult> results,
+    String? term,
+  ) async {
+    if (results.isEmpty) return null;
+    final tokens = (term != null && term.isNotEmpty)
+        ? _productTokens(term)
+        : <String>[];
+
+    bool relevant(SearchResult r) {
+      if (tokens.isEmpty) return true;
+      final t = _normalizeShop(r.title);
+      return tokens.any((tok) => t.contains(tok));
+    }
+
+    bool trusted(SearchResult r) {
+      final l = r.link.toLowerCase();
+      return _trustedLinkDomains.any((d) => l.contains(d));
+    }
+
+    // Ordine de preferință: încredere + relevant → relevant → orice.
+    final ordered = <SearchResult>[
+      ...results.where((r) => trusted(r) && relevant(r)),
+      ...results.where((r) => relevant(r) && !trusted(r)),
+      ...results,
+    ];
+
+    final seen = <String>{};
+    for (final r in ordered) {
+      if (r.link.isEmpty || !seen.add(r.link)) continue;
+      // Domeniile de încredere le acceptăm direct; restul, doar dacă răspund.
+      if (trusted(r) || await _isReachable(r.link)) {
+        return {
+          'label': r.title.isNotEmpty ? r.title : _domainOf(r.link),
+          'subtitle': _domainOf(r.link),
+          'url': r.link,
+          'source': 'internet',
+        };
+      }
+    }
+    return null;
+  }
+
+  Future<bool> _isReachable(String url) async {
+    try {
+      final head = await http
+          .head(Uri.parse(url))
+          .timeout(const Duration(seconds: 6));
+      return head.statusCode < 400;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  String _domainOf(String url) {
+    try {
+      return Uri.parse(url).host.replaceFirst('www.', '');
+    } catch (_) {
+      return url;
     }
   }
 
