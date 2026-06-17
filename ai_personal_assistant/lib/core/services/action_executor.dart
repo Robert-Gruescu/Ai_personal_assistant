@@ -100,13 +100,16 @@ class ActionExecutor {
         final addedTasks = <String>[];
         for (final taskData in tasksList) {
           final taskMap = taskData as Map<String, dynamic>;
+          final due = _taskDateTime(taskMap['due_date'], taskMap['due_time']);
           final task = await _db.createTask(
             title: taskMap['title'] ?? 'Task fără titlu',
             description: taskMap['description'],
-            dueDate: _parseDate(taskMap['due_date']),
+            dueDate: due,
+            reminderDate: due?.subtract(const Duration(minutes: 10)),
             priority: _parsePriority(taskMap['priority']),
             category: taskMap['category'],
           );
+          if (due != null) await _scheduleTaskReminder(task);
           addedTasks.add(task.title);
         }
         final allTasks = await _db.getAllTasks(completed: false);
@@ -120,13 +123,16 @@ class ActionExecutor {
         );
       }
 
+      final due = _taskDateTime(data['due_date'], data['due_time']);
       final task = await _db.createTask(
         title: data['title'] ?? 'Task fără titlu',
         description: data['description'],
-        dueDate: _parseDate(data['due_date']),
+        dueDate: due,
+        reminderDate: due?.subtract(const Duration(minutes: 10)),
         priority: _parsePriority(data['priority']),
         category: data['category'],
       );
+      if (due != null) await _scheduleTaskReminder(task);
       final allTasks = await _db.getAllTasks(completed: false);
       return ActionResult.success(
         'Task-ul "${task.title}" a fost adăugat.',
@@ -1112,6 +1118,37 @@ class ActionExecutor {
   }
 
   // ============ HELPER METHODS ============
+
+  /// Construiește data+ora unui task. Întoarce null dacă NU există dată
+  /// (task simplu, fără notificare). Dacă există dată dar nu și oră → 10:00.
+  DateTime? _taskDateTime(dynamic dateRaw, dynamic timeRaw) {
+    final dateStr = dateRaw?.toString();
+    if (dateStr == null || dateStr.trim().isEmpty) return null;
+    final date = _parseDate(dateStr);
+    if (date == null) return null;
+
+    int hour = 10, minute = 0; // oră implicită 10:00
+    final timeStr = timeRaw?.toString().trim() ?? '';
+    final m = RegExp(r'(\d{1,2}):(\d{2})').firstMatch(timeStr);
+    if (m != null) {
+      hour = (int.tryParse(m.group(1)!) ?? 10).clamp(0, 23);
+      minute = (int.tryParse(m.group(2)!) ?? 0).clamp(0, 59);
+    }
+    return DateTime(date.year, date.month, date.day, hour, minute);
+  }
+
+  /// Programează notificarea unui task cu 10 minute înainte de termen.
+  Future<void> _scheduleTaskReminder(Task task) async {
+    final due = task.dueDate;
+    if (due == null) return;
+    final notifId = task.id.hashCode & 0x7fffffff; // id pozitiv pentru notificare
+    await _notification.scheduleTaskReminder(
+      id: notifId,
+      title: task.title,
+      taskTime: due,
+      minutesBefore: 10,
+    );
+  }
 
   DateTime? _parseDate(String? dateStr) {
     if (dateStr == null || dateStr.isEmpty) return null;

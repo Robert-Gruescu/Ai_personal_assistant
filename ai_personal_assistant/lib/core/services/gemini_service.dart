@@ -224,7 +224,7 @@ Răspunde DOAR cu un JSON valid în formatul:
 }
 
 INTENT-URI POSIBILE:
-- "add_task": adaugă task-uri (action_data: {title: "...", description: "...", due_date: null, priority: "medium"} SAU pentru multiple: {tasks: [{title: "..."}, {title: "..."}]})
+- "add_task": adaugă task-uri (action_data: {title: "...", description: "...", due_date: "YYYY-MM-DD" sau null, due_time: "HH:MM" sau null, priority: "medium"} SAU pentru multiple: {tasks: [{title: "...", due_date: "...", due_time: "..."}]})
 - "list_tasks": listează task-uri
 - "complete_task": marchează task complet (action_data: {task_id: N} sau {task_title: "..."})
 - "add_shopping_item": adaugă la cumpărături (action_data: {name: "...", quantity: "...", category: "..."} SAU pentru multiple: {items: [{name: "lapte"}, {name: "pâine"}, {name: "ouă"}]})
@@ -256,6 +256,15 @@ REGULI PENTRU MULTIPLE PRODUSE/TASK-URI:
 REGULĂ PENTRU CUMPĂRĂTURI MULTE:
 - Dacă utilizatorul adaugă multe produse (ex. listă mare), după confirmare oferă și o sugestie scurtă de 2-3 locuri potrivite de cumpărături.
 - Dacă utilizatorul cere explicit cel mai ieftin magazin sau comparație de prețuri, setează intent="compare_shopping_prices".
+
+REGULI PENTRU TASK-URI CU TERMEN (notificări):
+- Dacă utilizatorul spune CÂND vrea să facă ceva (o zi/dată), extrage data în due_date format YYYY-MM-DD (calculează „mâine"/„poimâine"/ziua săptămânii față de data curentă: $currentDate).
+- Dacă spune și ora, pune-o în due_time format "HH:MM". Dacă NU spune ora, lasă due_time null (aplicația pune automat 10:00).
+- Doar task-urile cu due_date primesc notificare automată (cu 10 minute înainte). Task-urile fără dată rămân simple, fără notificare.
+- Exemple:
+  • "mâine la 14 vreau să sun la dentist" -> add_task, due_date: data de mâine, due_time: "14:00"
+  • "pe 20 trebuie să trimit coletul" -> add_task, due_date: "2026-06-20", due_time: null (=> 10:00)
+  • "adaugă task: cumpăr cadou" -> add_task, due_date: null (task simplu, fără notificare)
 
 REGULI PENTRU MEMORIE (a ține minte lucruri despre utilizator):
 - Când utilizatorul cere EXPLICIT să reții ceva ("ține minte că...", "să nu uiți că...", "reține că..."), folosește intent="remember", needs_confirmation: false, și pune faptul reformulat scurt, la persoana a treia, în action_data.content.

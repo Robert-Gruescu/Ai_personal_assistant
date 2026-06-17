@@ -19,12 +19,17 @@ void main() async {
   runApp(const MyApp());
 }
 
+/// Cheie globală de navigare — folosită pentru a deschide panourile
+/// (task-uri / cumpărături) când se apasă pe widget-ul din ecranul principal.
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: 'ASIS - Asistent Personal',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(

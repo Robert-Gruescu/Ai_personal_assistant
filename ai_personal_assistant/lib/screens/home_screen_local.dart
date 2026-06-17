@@ -489,8 +489,8 @@ class _HomeScreenState extends State<HomeScreen>
   // Dialogs
   // ─────────────────────────────────────────────────────────────────────────
 
-  void _showApiKeyDialog() {
-    showDialog(
+  Future<void> _showApiKeyDialog() {
+    return showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Configurare API Key'),
@@ -579,127 +579,181 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  void _showSettingsDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Setări'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (widget.onSwitchToVoice != null)
-              ListTile(
-                leading: const Icon(Icons.graphic_eq_rounded),
-                title: const Text('Comută pe modul Voce'),
-                subtitle: const Text('Asistent vocal, hands-free'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () {
-                  Navigator.pop(context);
-                  widget.onSwitchToVoice!();
-                },
+  // ─────────────────────────────────────────────────────────────────────────
+  // PAGINA SETĂRI (full-screen, structurată pe secțiuni)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  Future<void> _openSettingsPage() {
+    return Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => StatefulBuilder(
+          builder: (pageCtx, setLocal) {
+            final isDark = theme == 'dark';
+            void refresh() {
+              if (mounted) setState(() {});
+              setLocal(() {});
+            }
+
+            return Scaffold(
+              backgroundColor: isDark
+                  ? Colors.grey.shade900
+                  : Colors.grey.shade100,
+              appBar: AppBar(
+                title: const Text('Setări'),
+                backgroundColor: isDark ? Colors.grey.shade900 : Colors.white,
+                foregroundColor: isDark ? Colors.white : Colors.black87,
+                elevation: 0,
               ),
-            ListTile(
-              leading: const Icon(Icons.key),
-              title: const Text('Cheie API Gemini'),
-              subtitle: Text(
-                isApiKeyConfigured ? 'Configurată' : 'Neconfigurată',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                Navigator.pop(context);
-                _showApiKeyDialog();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.email),
-              title: const Text('Configurare Email'),
-              subtitle: const Text('SMTP settings'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                Navigator.pop(context);
-                _showEmailConfigDialog();
-              },
-            ),
-            ListTile(
-              leading: Icon(
-                Icons.video_call,
-                color: isGoogleConnected ? Colors.green : null,
-              ),
-              title: const Text('Cont Google (Meet, Calendar, Gmail)'),
-              subtitle: Text(
-                isGoogleConnected
-                    ? 'Conectat: ${googleEmail ?? ""}'
-                    : 'Neconectat — necesar pentru Meet real și citire/trimitere Gmail',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                Navigator.pop(context);
-                if (isGoogleConnected) {
-                  _disconnectGoogle();
-                } else {
-                  _connectGoogle();
-                }
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete_forever),
-              title: const Text('Șterge toate datele'),
-              subtitle: const Text('Conversații, task-uri, etc.'),
-              onTap: () async {
-                Navigator.pop(context);
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('Confirmare'),
-                    content: const Text(
-                      'Ești sigur că vrei să ștergi toate datele?',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(ctx, false),
-                        child: const Text('Anulează'),
+              body: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                children: [
+                  // ── Conturi și conectare ──────────────────────────────────
+                  _SettingsSectionTitle('Conturi și conectare', isDark: isDark),
+                  _SettingsCard(
+                    isDark: isDark,
+                    children: [
+                      _SettingsTile(
+                        isDark: isDark,
+                        badgeColor: const Color(0xFF4285F4),
+                        badgeIcon: Icons.g_mobiledata_rounded,
+                        title: 'Cont Google',
+                        subtitle: isGoogleConnected
+                            ? 'Conectat: ${googleEmail ?? ""}'
+                            : 'Meet, Calendar și Gmail',
+                        connected: isGoogleConnected,
+                        onTap: () async {
+                          if (isGoogleConnected) {
+                            await _disconnectGoogle();
+                          } else {
+                            await _connectGoogle();
+                          }
+                          refresh();
+                        },
                       ),
-                      ElevatedButton(
-                        onPressed: () => Navigator.pop(ctx, true),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red,
-                        ),
-                        child: const Text('Șterge'),
+                      _SettingsDivider(isDark: isDark),
+                      _SettingsTile(
+                        isDark: isDark,
+                        badgeColor: const Color(0xFFEA4335),
+                        badgeIcon: Icons.mail_rounded,
+                        title: 'Conectare Email',
+                        subtitle: 'Trimitere emailuri (SMTP / Gmail)',
+                        onTap: () async {
+                          await _showEmailConfigDialog();
+                          refresh();
+                        },
+                      ),
+                      _SettingsDivider(isDark: isDark),
+                      _SettingsTile(
+                        isDark: isDark,
+                        badgeColor: const Color(0xFF7E57C2),
+                        badgeIcon: Icons.vpn_key_rounded,
+                        title: 'Cheie API Gemini',
+                        subtitle: isApiKeyConfigured
+                            ? 'Configurată'
+                            : 'Necesară pentru a folosi asistentul',
+                        connected: isApiKeyConfigured,
+                        onTap: () async {
+                          await _showApiKeyDialog();
+                          refresh();
+                        },
                       ),
                     ],
                   ),
-                );
-                if (confirmed == true) {
-                  await DatabaseService().clearAllData();
-                  await _widget.updateWidget();
-                  if (mounted)
-                    setState(() {
-                      sessions.clear();
-                      _createInitialSession();
-                    });
-                }
-              },
-            ),
-          ],
+
+                  // ── Aspect ────────────────────────────────────────────────
+                  _SettingsSectionTitle('Aspect', isDark: isDark),
+                  _SettingsCard(
+                    isDark: isDark,
+                    children: [
+                      _SettingsTile(
+                        isDark: isDark,
+                        badgeColor: const Color(0xFF455A64),
+                        badgeIcon: Icons.brightness_6_rounded,
+                        title: 'Temă întunecată',
+                        subtitle: isDark ? 'Activată' : 'Dezactivată',
+                        trailing: Switch(
+                          value: isDark,
+                          onChanged: (v) {
+                            theme = v ? 'dark' : 'light';
+                            refresh();
+                          },
+                        ),
+                        onTap: () {
+                          theme = isDark ? 'light' : 'dark';
+                          refresh();
+                        },
+                      ),
+                    ],
+                  ),
+
+                  // ── Date ──────────────────────────────────────────────────
+                  _SettingsSectionTitle('Date', isDark: isDark),
+                  _SettingsCard(
+                    isDark: isDark,
+                    children: [
+                      _SettingsTile(
+                        isDark: isDark,
+                        badgeColor: const Color(0xFFE53935),
+                        badgeIcon: Icons.delete_forever_rounded,
+                        title: 'Șterge toate datele',
+                        subtitle: 'Conversații, task-uri, cumpărături, memorie',
+                        danger: true,
+                        onTap: () async {
+                          final confirmed = await showDialog<bool>(
+                            context: pageCtx,
+                            builder: (ctx) => AlertDialog(
+                              title: const Text('Confirmare'),
+                              content: const Text(
+                                'Ești sigur că vrei să ștergi toate datele?',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: const Text('Anulează'),
+                                ),
+                                ElevatedButton(
+                                  onPressed: () => Navigator.pop(ctx, true),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.red,
+                                  ),
+                                  child: const Text('Șterge'),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (confirmed == true) {
+                            await DatabaseService().clearAllData();
+                            await _widget.updateWidget();
+                            if (mounted) {
+                              setState(() {
+                                sessions.clear();
+                                _createInitialSession();
+                              });
+                            }
+                            refresh();
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            );
+          },
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Închide'),
-          ),
-        ],
       ),
     );
   }
 
-  void _showEmailConfigDialog() async {
+  Future<void> _showEmailConfigDialog() async {
     final savedEmail = await _config.smtpUser;
     final savedPassword = await _config.smtpPassword;
     final smtpUserCtrl = TextEditingController(text: savedEmail ?? '');
     final smtpPasswordCtrl = TextEditingController(text: savedPassword ?? '');
     if (!mounted) return;
 
-    showDialog(
+    await showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Configurare Email'),
@@ -813,50 +867,75 @@ class _HomeScreenState extends State<HomeScreen>
           children: [
             // ── Header ──────────────────────────────────────────────────────
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
               child: Row(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.menu),
-                    onPressed: () => _showSidebarDrawer(context, isDark),
+                    icon: const Icon(Icons.menu_rounded),
+                    tooltip: 'Conversații',
+                    onPressed: _openConversationsPage,
                   ),
                   const Text(
                     'ASIS',
-                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(width: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
+                      horizontal: 10,
                       vertical: 4,
                     ),
                     decoration: BoxDecoration(
-                      color: isApiKeyConfigured ? Colors.green : Colors.orange,
-                      borderRadius: BorderRadius.circular(12),
+                      color: (isApiKeyConfigured ? Colors.green : Colors.orange)
+                          .withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Text(
-                      isApiKeyConfigured ? 'Local' : 'Config',
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isApiKeyConfigured
+                              ? Icons.offline_bolt_rounded
+                              : Icons.error_outline_rounded,
+                          size: 13,
+                          color: isApiKeyConfigured
+                              ? Colors.green.shade700
+                              : Colors.orange.shade800,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          isApiKeyConfigured ? 'Local' : 'Config',
+                          style: TextStyle(
+                            color: isApiKeyConfigured
+                                ? Colors.green.shade700
+                                : Colors.orange.shade800,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.checklist_rounded),
+                  _HeaderIconButton(
+                    icon: Icons.checklist_rounded,
                     tooltip: 'Task-uri',
-                    color: Colors.indigo,
-                    onPressed: _showTasksSheet,
+                    onTap: _showTasksSheet,
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.shopping_cart_outlined),
+                  const SizedBox(width: 6),
+                  _HeaderIconButton(
+                    icon: Icons.shopping_cart_rounded,
                     tooltip: 'Cumpărături',
-                    color: Colors.indigo,
-                    onPressed: _showShoppingSheet,
+                    onTap: _showShoppingSheet,
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.settings),
-                    onPressed: _showSettingsDialog,
-                    tooltip: 'Setări',
-                  ),
+                  if (widget.onSwitchToVoice != null) ...[
+                    const SizedBox(width: 6),
+                    _HeaderIconButton(
+                      icon: Icons.graphic_eq_rounded,
+                      tooltip: 'Mod Voce',
+                      onTap: widget.onSwitchToVoice!,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -992,162 +1071,161 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Sidebar drawer
+  // PAGINA CONVERSAȚII (full-screen)
   // ─────────────────────────────────────────────────────────────────────────
 
-  void _showSidebarDrawer(BuildContext context, bool isDark) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => DraggableScrollableSheet(
-        initialChildSize: 0.75,
-        minChildSize: 0.5,
-        maxChildSize: 0.95,
-        expand: false,
-        builder: (_, scrollController) => Container(
-          padding: const EdgeInsets.all(16),
-          child: _buildSidebar(isDark),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSidebar(bool isDark) {
-    return Column(
-      children: [
-        const CircleAvatar(
-          radius: 32,
-          backgroundColor: Colors.indigo,
-          child: Icon(Icons.smart_toy, color: Colors.white, size: 32),
-        ),
-        const SizedBox(height: 12),
-        const Text(
-          'ASIS',
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-        ),
-        const Text(
-          'Asistent Personal Local',
-          style: TextStyle(fontSize: 12, color: Colors.grey),
-        ),
-        const SizedBox(height: 4),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          decoration: BoxDecoration(
-            color: Colors.green.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: const Text(
-            '📱 Rulează pe telefon',
-            style: TextStyle(fontSize: 10, color: Colors.green),
-          ),
-        ),
-        const SizedBox(height: 20),
-
-        Row(
-          children: [
-            Expanded(
-              child: _SidebarActionButton(
-                icon: Icons.checklist_rounded,
-                label: 'Task-uri',
-                color: Colors.indigo,
-                onTap: () {
-                  Navigator.pop(context);
-                  _showTasksSheet();
-                },
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _SidebarActionButton(
-                icon: Icons.shopping_cart_outlined,
-                label: 'Cumpărături',
-                color: Colors.teal,
-                onTap: () {
-                  Navigator.pop(context);
-                  _showShoppingSheet();
-                },
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-
-        ElevatedButton.icon(
-          onPressed: () {
-            Navigator.pop(context); // închide bara laterală automat
-            _createNewSession();
-          },
-          icon: const Icon(Icons.add),
-          label: const Text('Conversație Nouă'),
-          style: ElevatedButton.styleFrom(
-            minimumSize: const Size(double.infinity, 44),
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        const Align(
-          alignment: Alignment.centerLeft,
-          child: Text(
-            'Conversații',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-        ),
-        const SizedBox(height: 8),
-
-        Expanded(
-          child: ListView.builder(
-            itemCount: sessions.length,
-            itemBuilder: (_, index) {
-              final s = sessions[index];
-              final selected = s.id == sessionId;
-              return Container(
-                margin: const EdgeInsets.symmetric(vertical: 2),
-                child: ListTile(
-                  dense: true,
-                  selected: selected,
-                  selectedTileColor: Colors.indigo.withOpacity(0.1),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+  void _openConversationsPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => StatefulBuilder(
+          builder: (pageCtx, setLocal) {
+            final isDark = theme == 'dark';
+            return Scaffold(
+              backgroundColor: isDark
+                  ? Colors.grey.shade900
+                  : Colors.grey.shade100,
+              appBar: AppBar(
+                title: const Text('Conversații'),
+                backgroundColor: isDark ? Colors.grey.shade900 : Colors.white,
+                foregroundColor: isDark ? Colors.white : Colors.black87,
+                elevation: 0,
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.settings_outlined),
+                    tooltip: 'Setări',
+                    // După închiderea Setărilor, reconstruim pagina Conversații
+                    // ca să reflecte imediat schimbarea de temă.
+                    onPressed: () async {
+                      await _openSettingsPage();
+                      setLocal(() {});
+                    },
                   ),
-                  leading: const Icon(Icons.chat_bubble_outline, size: 20),
-                  title: Text(
-                    s.title,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: selected
-                          ? FontWeight.bold
-                          : FontWeight.normal,
+                ],
+              ),
+              body: Column(
+                children: [
+                  // Buton conversație nouă
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.pop(pageCtx);
+                          _createNewSession();
+                        },
+                        icon: const Icon(Icons.add_rounded),
+                        label: const Text('Conversație nouă'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.indigo,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size(double.infinity, 50),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          elevation: 0,
+                        ),
+                      ),
                     ),
                   ),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete_outline, size: 18),
-                    onPressed: () => _deleteSession(s.id),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 6),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Istoric (${sessions.length})',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                          color: isDark ? Colors.white60 : Colors.black54,
+                        ),
+                      ),
+                    ),
                   ),
-                  onTap: () {
-                    Navigator.pop(context); // închide bara laterală automat
-                    _switchSession(s.id);
-                  },
-                ),
-              );
-            },
-          ),
+                  // Lista completă, scrollabilă
+                  Expanded(
+                    child: sessions.isEmpty
+                        ? Center(
+                            child: Text(
+                              'Nicio conversație încă',
+                              style: TextStyle(
+                                color: isDark
+                                    ? Colors.white38
+                                    : Colors.black38,
+                              ),
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+                            itemCount: sessions.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(height: 6),
+                            itemBuilder: (_, index) {
+                              final s = sessions[index];
+                              final selected = s.id == sessionId;
+                              return Material(
+                                color: selected
+                                    ? Colors.indigo.withOpacity(0.12)
+                                    : (isDark
+                                          ? Colors.grey.shade800
+                                          : Colors.white),
+                                borderRadius: BorderRadius.circular(12),
+                                child: ListTile(
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  leading: CircleAvatar(
+                                    radius: 18,
+                                    backgroundColor: selected
+                                        ? Colors.indigo
+                                        : Colors.indigo.withOpacity(0.12),
+                                    child: Icon(
+                                      Icons.chat_bubble_rounded,
+                                      size: 18,
+                                      color: selected
+                                          ? Colors.white
+                                          : Colors.indigo,
+                                    ),
+                                  ),
+                                  title: Text(
+                                    s.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontWeight: selected
+                                          ? FontWeight.bold
+                                          : FontWeight.w500,
+                                      color: isDark ? Colors.white : null,
+                                    ),
+                                  ),
+                                  trailing: IconButton(
+                                    icon: Icon(
+                                      Icons.delete_outline_rounded,
+                                      size: 20,
+                                      color: isDark
+                                          ? Colors.white38
+                                          : Colors.black38,
+                                    ),
+                                    onPressed: () async {
+                                      await _deleteSession(s.id);
+                                      setLocal(() {});
+                                    },
+                                  ),
+                                  onTap: () {
+                                    Navigator.pop(pageCtx);
+                                    _switchSession(s.id);
+                                  },
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            );
+          },
         ),
-
-        const Divider(),
-        ListTile(
-          leading: const Icon(Icons.brightness_6),
-          title: const Text('Temă'),
-          trailing: Switch(
-            value: theme == 'dark',
-            onChanged: (v) => setState(() => theme = v ? 'dark' : 'light'),
-          ),
-        ),
-        ListTile(
-          leading: const Icon(Icons.settings),
-          title: const Text('Setări'),
-          onTap: _showSettingsDialog,
-        ),
-      ],
+      ),
     );
   }
 
@@ -1276,48 +1354,159 @@ class _HomeScreenState extends State<HomeScreen>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sidebar Action Button widget
+// Buton rotund pentru antetul ecranului principal (Task-uri / Cumpărături)
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _SidebarActionButton extends StatelessWidget {
+class _HeaderIconButton extends StatelessWidget {
   final IconData icon;
-  final String label;
-  final Color color;
+  final String tooltip;
   final VoidCallback onTap;
 
-  const _SidebarActionButton({
+  const _HeaderIconButton({
     required this.icon,
-    required this.label,
-    required this.color,
+    required this.tooltip,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: color.withOpacity(0.1),
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.indigo.withOpacity(0.1),
         borderRadius: BorderRadius.circular(12),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          child: Column(
-            children: [
-              Icon(icon, color: color, size: 28),
-              const SizedBox(height: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  color: color,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                ),
-              ),
-            ],
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Icon(icon, color: Colors.indigo, size: 22),
           ),
         ),
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Widget-uri pentru pagina de SETĂRI (titlu secțiune, card, rând, separator)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SettingsSectionTitle extends StatelessWidget {
+  final String text;
+  final bool isDark;
+  const _SettingsSectionTitle(this.text, {required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
+      child: Text(
+        text.toUpperCase(),
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.8,
+          color: isDark ? Colors.white54 : Colors.black45,
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsCard extends StatelessWidget {
+  final List<Widget> children;
+  final bool isDark;
+  const _SettingsCard({required this.children, required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: isDark ? Colors.grey.shade800 : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(children: children),
+    );
+  }
+}
+
+class _SettingsDivider extends StatelessWidget {
+  final bool isDark;
+  const _SettingsDivider({required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 68),
+      child: Divider(
+        height: 1,
+        thickness: 0.6,
+        color: isDark ? Colors.white12 : Colors.black12,
+      ),
+    );
+  }
+}
+
+class _SettingsTile extends StatelessWidget {
+  final Color badgeColor;
+  final IconData badgeIcon;
+  final String title;
+  final String subtitle;
+  final bool connected;
+  final bool danger;
+  final bool isDark;
+  final Widget? trailing;
+  final VoidCallback onTap;
+
+  const _SettingsTile({
+    required this.badgeColor,
+    required this.badgeIcon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    required this.isDark,
+    this.connected = false,
+    this.danger = false,
+    this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: badgeColor,
+          borderRadius: BorderRadius.circular(11),
+        ),
+        child: Icon(badgeIcon, color: Colors.white, size: 24),
+      ),
+      title: Text(
+        title,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          color: danger
+              ? Colors.red
+              : (isDark ? Colors.white : Colors.black87),
+        ),
+      ),
+      subtitle: Text(
+        subtitle,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: 12.5),
+      ),
+      trailing:
+          trailing ??
+          (connected
+              ? const Icon(Icons.check_circle, color: Colors.green, size: 20)
+              : const Icon(Icons.chevron_right, size: 22)),
+      onTap: onTap,
     );
   }
 }

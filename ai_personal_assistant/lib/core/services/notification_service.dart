@@ -208,6 +208,71 @@ class NotificationService {
     }
   }
 
+  /// Schedule a reminder for a task that has a due date/time.
+  /// Notifică cu `minutesBefore` minute înainte de termen (implicit 10).
+  Future<bool> scheduleTaskReminder({
+    required int id,
+    required String title,
+    required DateTime taskTime,
+    int minutesBefore = 10,
+  }) async {
+    if (!_isInitialized) {
+      await initialize();
+    }
+
+    try {
+      final reminderTime = taskTime.subtract(Duration(minutes: minutesBefore));
+
+      // Nu programa dacă momentul reminderului e deja trecut.
+      if (reminderTime.isBefore(DateTime.now())) {
+        print('⚠️ Task reminder time is in the past, skipping');
+        return false;
+      }
+
+      final scheduledDate = tz.TZDateTime.from(reminderTime, tz.local);
+
+      const androidDetails = AndroidNotificationDetails(
+        'task_reminders',
+        'Reminder task-uri',
+        channelDescription: 'Notificări pentru task-uri cu termen',
+        importance: Importance.high,
+        priority: Priority.high,
+        playSound: true,
+        enableVibration: true,
+        category: AndroidNotificationCategory.reminder,
+        visibility: NotificationVisibility.public,
+      );
+
+      const iosDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      );
+
+      const details = NotificationDetails(
+        android: androidDetails,
+        iOS: iosDetails,
+      );
+
+      await _notifications.zonedSchedule(
+        id,
+        '🔔 Task în $minutesBefore minute',
+        title,
+        scheduledDate,
+        details,
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      );
+
+      print(
+        '✅ Task reminder scheduled for $scheduledDate ($minutesBefore min before)',
+      );
+      return true;
+    } catch (e) {
+      print('❌ Failed to schedule task reminder: $e');
+      return false;
+    }
+  }
+
   /// Cancel a scheduled notification
   Future<void> cancelNotification(int id) async {
     await _notifications.cancel(id);
