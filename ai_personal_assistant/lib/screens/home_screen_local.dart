@@ -5,6 +5,8 @@ import '../services/local_assistant_service.dart';
 import '../core/services/services.dart';
 import '../core/services/widget_service.dart';
 import 'data_sheets.dart';
+import 'settings_widgets.dart';
+import '../main.dart' show themeNotifier, setAppTheme;
 
 // ─── Model classes ────────────────────────────────────────────────────────────
 
@@ -61,7 +63,8 @@ class _HomeScreenState extends State<HomeScreen>
   String sessionId = '';
   List<Session> sessions = [];
 
-  String theme = 'light';
+  /// Tema curentă vine din „contextul" global al aplicației (persistent).
+  bool get _isDark => themeNotifier.value == ThemeMode.dark;
 
   final TextEditingController _textController = TextEditingController();
   final TextEditingController _apiKeyController = TextEditingController();
@@ -588,7 +591,7 @@ class _HomeScreenState extends State<HomeScreen>
       MaterialPageRoute(
         builder: (_) => StatefulBuilder(
           builder: (pageCtx, setLocal) {
-            final isDark = theme == 'dark';
+            final isDark = _isDark;
             void refresh() {
               if (mounted) setState(() {});
               setLocal(() {});
@@ -608,11 +611,11 @@ class _HomeScreenState extends State<HomeScreen>
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 children: [
                   // ── Conturi și conectare ──────────────────────────────────
-                  _SettingsSectionTitle('Conturi și conectare', isDark: isDark),
-                  _SettingsCard(
+                  SettingsSectionTitle('Conturi și conectare', isDark: isDark),
+                  SettingsCard(
                     isDark: isDark,
                     children: [
-                      _SettingsTile(
+                      SettingsTile(
                         isDark: isDark,
                         badgeColor: const Color(0xFF4285F4),
                         badgeIcon: Icons.g_mobiledata_rounded,
@@ -630,8 +633,8 @@ class _HomeScreenState extends State<HomeScreen>
                           refresh();
                         },
                       ),
-                      _SettingsDivider(isDark: isDark),
-                      _SettingsTile(
+                      SettingsDivider(isDark: isDark),
+                      SettingsTile(
                         isDark: isDark,
                         badgeColor: const Color(0xFFEA4335),
                         badgeIcon: Icons.mail_rounded,
@@ -642,8 +645,8 @@ class _HomeScreenState extends State<HomeScreen>
                           refresh();
                         },
                       ),
-                      _SettingsDivider(isDark: isDark),
-                      _SettingsTile(
+                      SettingsDivider(isDark: isDark),
+                      SettingsTile(
                         isDark: isDark,
                         badgeColor: const Color(0xFF7E57C2),
                         badgeIcon: Icons.vpn_key_rounded,
@@ -661,11 +664,11 @@ class _HomeScreenState extends State<HomeScreen>
                   ),
 
                   // ── Aspect ────────────────────────────────────────────────
-                  _SettingsSectionTitle('Aspect', isDark: isDark),
-                  _SettingsCard(
+                  SettingsSectionTitle('Aspect', isDark: isDark),
+                  SettingsCard(
                     isDark: isDark,
                     children: [
-                      _SettingsTile(
+                      SettingsTile(
                         isDark: isDark,
                         badgeColor: const Color(0xFF455A64),
                         badgeIcon: Icons.brightness_6_rounded,
@@ -673,13 +676,13 @@ class _HomeScreenState extends State<HomeScreen>
                         subtitle: isDark ? 'Activată' : 'Dezactivată',
                         trailing: Switch(
                           value: isDark,
-                          onChanged: (v) {
-                            theme = v ? 'dark' : 'light';
+                          onChanged: (v) async {
+                            await setAppTheme(v);
                             refresh();
                           },
                         ),
-                        onTap: () {
-                          theme = isDark ? 'light' : 'dark';
+                        onTap: () async {
+                          await setAppTheme(!isDark);
                           refresh();
                         },
                       ),
@@ -687,11 +690,11 @@ class _HomeScreenState extends State<HomeScreen>
                   ),
 
                   // ── Date ──────────────────────────────────────────────────
-                  _SettingsSectionTitle('Date', isDark: isDark),
-                  _SettingsCard(
+                  SettingsSectionTitle('Date', isDark: isDark),
+                  SettingsCard(
                     isDark: isDark,
                     children: [
-                      _SettingsTile(
+                      SettingsTile(
                         isDark: isDark,
                         badgeColor: const Color(0xFFE53935),
                         badgeIcon: Icons.delete_forever_rounded,
@@ -858,7 +861,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   Widget build(BuildContext context) {
-    final bool isDark = theme == 'dark';
+    final bool isDark = _isDark;
 
     return Scaffold(
       backgroundColor: isDark ? Colors.grey.shade900 : Colors.indigo.shade50,
@@ -917,22 +920,25 @@ class _HomeScreenState extends State<HomeScreen>
                     ),
                   ),
                   const Spacer(),
-                  _HeaderIconButton(
+                  HeaderIconButton(
                     icon: Icons.checklist_rounded,
                     tooltip: 'Task-uri',
+                    isDark: isDark,
                     onTap: _showTasksSheet,
                   ),
                   const SizedBox(width: 6),
-                  _HeaderIconButton(
+                  HeaderIconButton(
                     icon: Icons.shopping_cart_rounded,
                     tooltip: 'Cumpărături',
+                    isDark: isDark,
                     onTap: _showShoppingSheet,
                   ),
                   if (widget.onSwitchToVoice != null) ...[
                     const SizedBox(width: 6),
-                    _HeaderIconButton(
+                    HeaderIconButton(
                       icon: Icons.graphic_eq_rounded,
                       tooltip: 'Mod Voce',
+                      isDark: isDark,
                       onTap: widget.onSwitchToVoice!,
                     ),
                   ],
@@ -1079,7 +1085,7 @@ class _HomeScreenState extends State<HomeScreen>
       MaterialPageRoute(
         builder: (_) => StatefulBuilder(
           builder: (pageCtx, setLocal) {
-            final isDark = theme == 'dark';
+            final isDark = _isDark;
             return Scaffold(
               backgroundColor: isDark
                   ? Colors.grey.shade900
@@ -1353,160 +1359,6 @@ class _HomeScreenState extends State<HomeScreen>
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Buton rotund pentru antetul ecranului principal (Task-uri / Cumpărături)
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _HeaderIconButton extends StatelessWidget {
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onTap;
-
-  const _HeaderIconButton({
-    required this.icon,
-    required this.tooltip,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: Colors.indigo.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(10),
-            child: Icon(icon, color: Colors.indigo, size: 22),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Widget-uri pentru pagina de SETĂRI (titlu secțiune, card, rând, separator)
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _SettingsSectionTitle extends StatelessWidget {
-  final String text;
-  final bool isDark;
-  const _SettingsSectionTitle(this.text, {required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
-      child: Text(
-        text.toUpperCase(),
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 0.8,
-          color: isDark ? Colors.white54 : Colors.black45,
-        ),
-      ),
-    );
-  }
-}
-
-class _SettingsCard extends StatelessWidget {
-  final List<Widget> children;
-  final bool isDark;
-  const _SettingsCard({required this.children, required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: isDark ? Colors.grey.shade800 : Colors.white,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(children: children),
-    );
-  }
-}
-
-class _SettingsDivider extends StatelessWidget {
-  final bool isDark;
-  const _SettingsDivider({required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 68),
-      child: Divider(
-        height: 1,
-        thickness: 0.6,
-        color: isDark ? Colors.white12 : Colors.black12,
-      ),
-    );
-  }
-}
-
-class _SettingsTile extends StatelessWidget {
-  final Color badgeColor;
-  final IconData badgeIcon;
-  final String title;
-  final String subtitle;
-  final bool connected;
-  final bool danger;
-  final bool isDark;
-  final Widget? trailing;
-  final VoidCallback onTap;
-
-  const _SettingsTile({
-    required this.badgeColor,
-    required this.badgeIcon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-    required this.isDark,
-    this.connected = false,
-    this.danger = false,
-    this.trailing,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: badgeColor,
-          borderRadius: BorderRadius.circular(11),
-        ),
-        child: Icon(badgeIcon, color: Colors.white, size: 24),
-      ),
-      title: Text(
-        title,
-        style: TextStyle(
-          fontWeight: FontWeight.w600,
-          color: danger
-              ? Colors.red
-              : (isDark ? Colors.white : Colors.black87),
-        ),
-      ),
-      subtitle: Text(
-        subtitle,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(fontSize: 12.5),
-      ),
-      trailing:
-          trailing ??
-          (connected
-              ? const Icon(Icons.check_circle, color: Colors.green, size: 20)
-              : const Icon(Icons.chevron_right, size: 22)),
-      onTap: onTap,
-    );
-  }
-}
+// Widget-urile pentru antet și pagina de Setări sunt acum partajate cu ecranul
+// de Voce — vezi `settings_widgets.dart` (HeaderIconButton, SettingsSectionTitle,
+// SettingsCard, SettingsTile, SettingsDivider).

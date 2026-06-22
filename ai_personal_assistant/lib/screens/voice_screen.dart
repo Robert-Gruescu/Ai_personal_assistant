@@ -4,6 +4,8 @@ import '../services/local_assistant_service.dart';
 import '../core/services/services.dart';
 import '../core/services/widget_service.dart';
 import 'data_sheets.dart';
+import 'settings_widgets.dart';
+import '../main.dart' show themeNotifier, setAppTheme;
 
 /// Stările vizuale ale asistentului vocal.
 enum VoiceState { idle, listening, processing, speaking }
@@ -36,6 +38,10 @@ class _VoiceScreenState extends State<VoiceScreen>
   String _status = 'Apasă pe microfon pentru a începe.';
   double _level = 0.0; // nivel de sunet normalizat 0..1 (cu netezire)
   bool _ready = false;
+
+  // Pentru afișarea stării în pagina de Setări.
+  bool _apiKeyConfigured = false;
+  bool _emailConfigured = false;
 
   late final AnimationController _anim;
 
@@ -89,12 +95,25 @@ class _VoiceScreenState extends State<VoiceScreen>
     final connected = await _googleAuth.signInSilently();
     if (connected) _service.syncGoogleEmail();
 
+    await _loadConfigFlags();
+
     if (mounted) {
       setState(() {
         _ready = true;
         _status = 'Apasă pe microfon pentru a începe.';
       });
     }
+  }
+
+  /// Reîncarcă starea „configurat" pentru cheia API și email (pentru bifele din Setări).
+  Future<void> _loadConfigFlags() async {
+    final apiKey = await _config.geminiApiKey;
+    final email = await _config.smtpUser;
+    if (!mounted) return;
+    setState(() {
+      _apiKeyConfigured = apiKey != null && apiKey.isNotEmpty;
+      _emailConfigured = email != null && email.isNotEmpty;
+    });
   }
 
   void _setState(VoiceState s, String status) {
@@ -245,7 +264,7 @@ class _VoiceScreenState extends State<VoiceScreen>
             children: [
               // ── Bara de sus ──
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 12, 12, 0),
+                padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
                 child: Row(
                   children: [
                     Text(
@@ -258,29 +277,32 @@ class _VoiceScreenState extends State<VoiceScreen>
                       ),
                     ),
                     const Spacer(),
-                    IconButton(
-                      icon: Icon(
-                        Icons.checklist_rounded,
-                        color: isDark ? Colors.white70 : const Color(0xFF6B6F8D),
-                      ),
-                      onPressed: _showTasks,
+                    HeaderIconButton(
+                      icon: Icons.chat_bubble_rounded,
+                      tooltip: 'Mod Chat',
+                      isDark: isDark,
+                      onTap: widget.onSwitchToChat,
+                    ),
+                    const SizedBox(width: 6),
+                    HeaderIconButton(
+                      icon: Icons.checklist_rounded,
                       tooltip: 'Task-uri',
+                      isDark: isDark,
+                      onTap: _showTasks,
                     ),
-                    IconButton(
-                      icon: Icon(
-                        Icons.shopping_cart_outlined,
-                        color: isDark ? Colors.white70 : const Color(0xFF6B6F8D),
-                      ),
-                      onPressed: _showShopping,
-                      tooltip: 'Lista de cumpărături',
+                    const SizedBox(width: 6),
+                    HeaderIconButton(
+                      icon: Icons.shopping_cart_rounded,
+                      tooltip: 'Cumpărături',
+                      isDark: isDark,
+                      onTap: _showShopping,
                     ),
-                    IconButton(
-                      icon: Icon(
-                        Icons.settings_rounded,
-                        color: isDark ? Colors.white70 : const Color(0xFF6B6F8D),
-                      ),
-                      onPressed: _showSettings,
+                    const SizedBox(width: 6),
+                    HeaderIconButton(
+                      icon: Icons.settings_rounded,
                       tooltip: 'Setări',
+                      isDark: isDark,
+                      onTap: _openSettingsPage,
                     ),
                   ],
                 ),
@@ -399,90 +421,148 @@ class _VoiceScreenState extends State<VoiceScreen>
     );
   }
 
-  // ── SETĂRI (pentru modul voce) ──────────────────────────────────────────
-  void _showSettings() {
-    showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.chat_bubble_outline_rounded),
-              title: const Text('Comută pe modul Chat (clasic)'),
-              subtitle: const Text('Interfață cu text și liste'),
-              onTap: () {
-                Navigator.pop(ctx);
-                widget.onSwitchToChat();
-              },
-            ),
-            ListTile(
-              leading: Icon(
-                _googleAuth.isSignedIn ? Icons.verified_user : Icons.login,
-                color: _googleAuth.isSignedIn ? Colors.green : null,
+  // ── SETĂRI (pagină full-screen, identică ca stil cu modul Chat) ──────────
+  Future<void> _openSettingsPage() {
+    return Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => StatefulBuilder(
+          builder: (pageCtx, setLocal) {
+            final isDark = themeNotifier.value == ThemeMode.dark;
+            void refresh() {
+              if (mounted) setState(() {});
+              setLocal(() {});
+            }
+
+            return Scaffold(
+              backgroundColor: isDark
+                  ? Colors.grey.shade900
+                  : Colors.grey.shade100,
+              appBar: AppBar(
+                title: const Text('Setări'),
+                backgroundColor: isDark ? Colors.grey.shade900 : Colors.white,
+                foregroundColor: isDark ? Colors.white : Colors.black87,
+                elevation: 0,
               ),
-              title: Text(
-                _googleAuth.isSignedIn
-                    ? 'Cont Google conectat'
-                    : 'Conectează-te cu Google',
+              body: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                children: [
+                  SettingsSectionTitle('Conturi și conectare', isDark: isDark),
+                  SettingsCard(
+                    isDark: isDark,
+                    children: [
+                      SettingsTile(
+                        isDark: isDark,
+                        badgeColor: const Color(0xFF4285F4),
+                        badgeIcon: Icons.g_mobiledata_rounded,
+                        title: 'Cont Google',
+                        subtitle: _googleAuth.isSignedIn
+                            ? 'Conectat: ${_googleAuth.userEmail ?? ""}'
+                            : 'Meet, Calendar și Gmail',
+                        connected: _googleAuth.isSignedIn,
+                        onTap: () async {
+                          if (_googleAuth.isSignedIn) {
+                            await _googleAuth.signOut();
+                          } else {
+                            final ok = await _googleAuth.signIn();
+                            if (ok) _service.syncGoogleEmail();
+                          }
+                          refresh();
+                        },
+                      ),
+                      SettingsDivider(isDark: isDark),
+                      SettingsTile(
+                        isDark: isDark,
+                        badgeColor: const Color(0xFFEA4335),
+                        badgeIcon: Icons.mail_rounded,
+                        title: 'Conectare Email',
+                        subtitle: _emailConfigured
+                            ? 'Configurat (SMTP / Gmail)'
+                            : 'Trimitere emailuri (rezervă)',
+                        connected: _emailConfigured,
+                        onTap: () async {
+                          await _showEmailConfigDialog();
+                          await _loadConfigFlags();
+                          refresh();
+                        },
+                      ),
+                      SettingsDivider(isDark: isDark),
+                      SettingsTile(
+                        isDark: isDark,
+                        badgeColor: const Color(0xFF7E57C2),
+                        badgeIcon: Icons.vpn_key_rounded,
+                        title: 'Cheie API Gemini',
+                        subtitle: _apiKeyConfigured
+                            ? 'Configurată'
+                            : 'Necesară pentru a folosi asistentul',
+                        connected: _apiKeyConfigured,
+                        onTap: () async {
+                          await _showApiKeyDialog();
+                          await _loadConfigFlags();
+                          refresh();
+                        },
+                      ),
+                    ],
+                  ),
+                  SettingsSectionTitle('Aspect', isDark: isDark),
+                  SettingsCard(
+                    isDark: isDark,
+                    children: [
+                      SettingsTile(
+                        isDark: isDark,
+                        badgeColor: const Color(0xFF455A64),
+                        badgeIcon: Icons.brightness_6_rounded,
+                        title: 'Temă întunecată',
+                        subtitle: isDark ? 'Activată' : 'Dezactivată',
+                        trailing: Switch(
+                          value: isDark,
+                          onChanged: (v) async {
+                            await setAppTheme(v);
+                            refresh();
+                          },
+                        ),
+                        onTap: () async {
+                          await setAppTheme(!isDark);
+                          refresh();
+                        },
+                      ),
+                    ],
+                  ),
+                  SettingsSectionTitle('Date', isDark: isDark),
+                  SettingsCard(
+                    isDark: isDark,
+                    children: [
+                      SettingsTile(
+                        isDark: isDark,
+                        badgeColor: const Color(0xFFE53935),
+                        badgeIcon: Icons.delete_forever_rounded,
+                        title: 'Șterge toate datele',
+                        subtitle: 'Conversații, task-uri, cumpărături, memorie',
+                        danger: true,
+                        onTap: () async {
+                          await _confirmClearData();
+                          refresh();
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                ],
               ),
-              subtitle: Text(
-                _googleAuth.isSignedIn
-                    ? '${_googleAuth.userEmail ?? ""} — apasă pentru deconectare'
-                    : 'Pentru Meet, Calendar și Gmail',
-              ),
-              onTap: () async {
-                Navigator.pop(ctx);
-                if (_googleAuth.isSignedIn) {
-                  await _googleAuth.signOut();
-                } else {
-                  final ok = await _googleAuth.signIn();
-                  if (ok) _service.syncGoogleEmail();
-                }
-                if (mounted) setState(() {});
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.key_rounded),
-              title: const Text('Cheie API Gemini'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showApiKeyDialog();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.email_outlined),
-              title: const Text('Configurare Email (SMTP)'),
-              subtitle: const Text('Rezervă, dacă nu folosești Google'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showEmailConfigDialog();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete_forever, color: Colors.red),
-              title: const Text('Șterge toate datele'),
-              subtitle: const Text('Conversații, task-uri, cumpărături'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _confirmClearData();
-              },
-            ),
-          ],
+            );
+          },
         ),
       ),
     );
   }
 
-  void _showEmailConfigDialog() async {
+  Future<void> _showEmailConfigDialog() async {
     final savedEmail = await _config.smtpUser;
     final savedPassword = await _config.smtpPassword;
     final userCtrl = TextEditingController(text: savedEmail ?? '');
     final passCtrl = TextEditingController(text: savedPassword ?? '');
     if (!mounted) return;
 
-    showDialog(
+    await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Configurare Email'),
@@ -572,9 +652,9 @@ class _VoiceScreenState extends State<VoiceScreen>
     }
   }
 
-  void _showApiKeyDialog() {
+  Future<void> _showApiKeyDialog() {
     final controller = TextEditingController();
-    showDialog(
+    return showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Cheie API Gemini'),
