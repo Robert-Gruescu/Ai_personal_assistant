@@ -783,6 +783,8 @@ class ActionExecutor {
     try {
       // Sursa = magazinul propriu (un singur magazin), deci `stores` nu se aplică.
       final forceRefresh = data['force_refresh'] == true;
+      // Doar reducerile la produsele din lista de cumpărături (când o cere).
+      final onlyFromList = data['only_shopping_list'] == true;
 
       final shoppingItems = await _db.getAllShoppingItems(purchased: false);
       final shoppingNames = shoppingItems.map((i) => i.name).toList();
@@ -800,24 +802,38 @@ class ActionExecutor {
         );
       }
 
-      final totalFound =
-          result.prioritizedItems.length + result.otherItems.length;
+      // Dacă a cerut DOAR din lista lui, dar lista e goală, spune-i clar.
+      if (onlyFromList && shoppingNames.isEmpty) {
+        return ActionResult.error(
+          'Lista ta de cumpărături e goală, așa că nu pot filtra reducerile după ea. Adaugă produse pe listă întâi.',
+        );
+      }
+
+      final totalFound = onlyFromList
+          ? result.prioritizedItems.length
+          : result.prioritizedItems.length + result.otherItems.length;
       if (totalFound == 0) {
         return ActionResult.error(
-          'Nu am găsit reduceri disponibile momentan. Încearcă din nou puțin mai târziu.',
+          onlyFromList
+              ? 'Nu am găsit reduceri la produsele din lista ta momentan.'
+              : 'Nu am găsit reduceri disponibile momentan. Încearcă din nou puțin mai târziu.',
         );
       }
 
       return ActionResult.success(
-        result.formatForAI(),
+        result.formatForAI(onlyFromList: onlyFromList),
         data: {
+          'only_shopping_list': onlyFromList,
           'total_found': totalFound,
           'matching_shopping_list': result.prioritizedItems.length,
+          'store_name': DiscountService.storeName,
           'prioritized': result.prioritizedItems
               .take(6)
               .map((i) => i.toJson())
               .toList(),
-          'others': result.otherItems.take(10).map((i) => i.toJson()).toList(),
+          if (!onlyFromList)
+            'others':
+                result.otherItems.take(10).map((i) => i.toJson()).toList(),
           'stores_checked': result.storeResults
               .where((r) => r.error == null)
               .map((r) => r.store)
@@ -826,8 +842,8 @@ class ActionExecutor {
           'product_links': [
             {
               'label': 'Vezi toate reducerile',
-              'subtitle': 'magazinul tău',
-              'url': 'https://magazin-online-five.vercel.app/reduceri',
+              'subtitle': DiscountService.storeName,
+              'url': '${DiscountService.siteBaseUrl}/reduceri',
               'source': 'shop',
             },
           ],

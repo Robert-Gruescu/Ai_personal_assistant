@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
+import 'discount_service.dart' show DiscountService;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIGURARE
@@ -489,7 +490,7 @@ class SearchService {
     for (final p in resp.shopProducts.take(2)) {
       links.add({
         'label': p.name,
-        'subtitle': '${p.price.toStringAsFixed(2)} lei — magazinul tău',
+        'subtitle': '${p.price.toStringAsFixed(2)} lei — ${DiscountService.storeName}',
         'url': '$_storeBaseUrl/produs/${p.id}',
         'source': 'shop',
       });

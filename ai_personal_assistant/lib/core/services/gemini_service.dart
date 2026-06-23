@@ -191,10 +191,14 @@ REGULA SIMPLĂ: Dacă întrebarea conține un PRODUS SPECIFIC + cuvinte ca "cost
               Dacă întrebarea e generală despre reduceri/oferte/promoții → get_discounts.
 
 REGULI PENTRU get_discounts:
-- Dacă menționează un magazin specific, pune-l în stores: ["Magazin"]
-- Dacă nu menționează magazine, lasă stores: null pentru a căuta la toate
+- Reducerile vin din magazinul propriu al utilizatorului (o singură sursă).
+- Dacă utilizatorul cere reducerile DOAR pentru produsele din lista lui de cumpărături
+  (ex: "ce reduceri sunt la produsele de pe lista mea?", "reduceri din lista mea",
+  "ce e ieftin din ce am pe listă?"), adaugă only_shopping_list: true în action_data.
+- Dacă vrea TOATE reducerile (ex: "ce reduceri sunt?", "arată-mi ofertele"),
+  lasă only_shopping_list: false (sau omite-l).
 - Dacă utilizatorul spune "actualizează", "caută din nou", "date noi", adaugă force_refresh: true în action_data
-- Rezultatele includ automat produsele din lista de cumpărături marcate prioritar
+- NU inventa numele magazinului în răspuns; folosește numele exact din rezultate.
 
 EXEMPLE ACȚIUNE IMEDIATĂ (needs_confirmation: false):
 - "adaugă lapte pe lista de cumpărături" -> EXECUTĂ, confirmă
@@ -203,8 +207,8 @@ EXEMPLE ACȚIUNE IMEDIATĂ (needs_confirmation: false):
 - "șterge laptele de pe listă" -> EXECUTĂ, confirmă
 - "programează o întâlnire cu Ion mâine la 14:00" -> EXECUTĂ, confirmă
 - "fă un meet cu ana@email.com poimâine la 10" -> EXECUTĂ, confirmă
-- "ce reduceri sunt la Lidl?" -> get_discounts, stores: ["Lidl"]
-- "arată ofertele Kaufland" -> get_discounts, stores: ["Kaufland"]
+- "ce reduceri sunt?" -> get_discounts (toate)
+- "ce reduceri sunt la produsele din lista mea?" -> get_discounts, only_shopping_list: true
 - "cât costă Coca-Cola la Lidl?" -> search_internet, query: "pret Coca Cola doza Lidl Romania"
 
 EXEMPLE CU CONFIRMARE (needs_confirmation: true):
@@ -237,7 +241,7 @@ INTENT-URI POSIBILE:
 - "summarize_email": rezumă un email specific (action_data: {index: N} - N=1 pentru ultimul)
 - "search_internet": caută informații sau prețuri specifice (action_data: {query: "..."})
 - "compare_shopping_prices": compară prețuri live pentru lista de cumpărături (action_data: {items: ["lapte", "ouă", "pâine"]} sau null pentru lista curentă)
-- "get_discounts": caută reduceri GENERALE de la supermarketuri .ro (action_data: {"stores": ["Lidl","Kaufland"]} sau null pentru toate; adaugă "force_refresh": true dacă utilizatorul cere date noi)
+- "get_discounts": caută reducerile din magazinul propriu (action_data: {"only_shopping_list": true} DOAR dacă utilizatorul cere reduceri pentru produsele din lista lui; altfel false/omis. Adaugă "force_refresh": true dacă cere date noi)
 - "schedule_meeting": programează întâlnire cu Meet (action_data: {title: "...", date: "YYYY-MM-DD", time: "HH:MM", attendee_email: "...", attendee_name: "...", description: "...", duration_minutes: 60, reminder_hours: 1})
 - "add_calendar_event": adaugă eveniment simplu în calendar (action_data: {title: "...", date: "YYYY-MM-DD", time: "HH:MM", description: "...", duration_minutes: 60})
 - "list_calendar_events": listează evenimentele din calendar

@@ -103,9 +103,21 @@ class DiscountResponse {
         error: msg,
       );
 
-  String formatForAI() {
+  String formatForAI({bool onlyFromList = false}) {
     if (!success || (prioritizedItems.isEmpty && otherItems.isEmpty)) {
       return 'Nu am găsit reduceri disponibile momentan.';
+    }
+
+    // Mod „doar din lista mea": arătăm exclusiv reducerile la produse de pe listă.
+    if (onlyFromList) {
+      if (prioritizedItems.isEmpty) {
+        return 'Nu am găsit reduceri la produsele din lista ta de cumpărături momentan.';
+      }
+      final b = StringBuffer('Reduceri la produse din lista ta:\n');
+      for (final item in prioritizedItems.take(10)) {
+        b.writeln('• ${item.toReadable()} (${item.store})');
+      }
+      return b.toString().trim();
     }
 
     final buf = StringBuffer();
@@ -225,8 +237,37 @@ class DiscountService {
   // tabelul weekly_deals), NU direct din baza de date și NU prin scraping.
   // Înlocuiește sursa mooldo.ro.
 
-  static const String _siteDiscountsUrl =
-      'https://magazin-online-five.vercel.app/api/reduceri';
+  /// Adresa magazinului propriu. Numele afișat (`storeName`) e dedus din ea,
+  /// ca să nu spunem generic „magazinul tău", ci numele real (ca Auchan/Lidl).
+  static const String siteBaseUrl = 'https://magazin-online-five.vercel.app';
+  static const String _siteDiscountsUrl = '$siteBaseUrl/api/reduceri';
+
+  /// Numele magazinului dedus din URL (ex: magazin-online-five.vercel.app →
+  /// „Magazin Online Five").
+  static final String storeName = _deriveStoreName(siteBaseUrl);
+
+  static String _deriveStoreName(String url) {
+    try {
+      var host = Uri.parse(url).host.replaceFirst(RegExp(r'^www\.'), '');
+      // Scoate sufixele de găzduire / TLD-urile comune.
+      host = host
+          .replaceAll(
+            RegExp(
+              r'\.(vercel\.app|netlify\.app|github\.io|web\.app|firebaseapp\.com|pages\.dev)$',
+            ),
+            '',
+          )
+          .replaceAll(RegExp(r'\.(ro|com|net|org|eu|store|shop|online)$'), '');
+      final label = host.split('.').first;
+      final words = label.split(RegExp(r'[-_]+')).where((w) => w.isNotEmpty);
+      if (words.isEmpty) return 'Magazinul tău';
+      return words
+          .map((w) => w[0].toUpperCase() + w.substring(1))
+          .join(' ');
+    } catch (_) {
+      return 'Magazinul tău';
+    }
+  }
 
   List<DiscountItem>? _siteCache;
   DateTime? _siteCacheAt;
@@ -265,7 +306,7 @@ class DiscountService {
         success: true,
         storeResults: [
           StoreDiscountResult(
-            store: 'Magazinul tău',
+            store: storeName,
             allDiscounts: items,
             matchingShoppingList: prioritized,
           ),
@@ -288,8 +329,13 @@ class DiscountService {
       return _siteCache!;
     }
 
+    // Cache-buster: evită copia învechită din CDN-ul Vercel (care poate servi
+    // un răspuns vechi `STALE`). Astfel app-ul ia mereu reducerile actuale.
+    final url = Uri.parse(_siteDiscountsUrl).replace(
+      queryParameters: {'t': now.millisecondsSinceEpoch.toString()},
+    );
     final resp = await http
-        .get(Uri.parse(_siteDiscountsUrl), headers: _headers)
+        .get(url, headers: {..._headers, 'Cache-Control': 'no-cache'})
         .timeout(const Duration(seconds: 15));
     if (resp.statusCode != 200) {
       print('Site reduceri: HTTP ${resp.statusCode}');
@@ -309,7 +355,7 @@ class DiscountService {
       final percent = raw['discount_percent'];
       items.add(DiscountItem(
         name: name,
-        store: 'Magazinul tău',
+        store: storeName,
         originalPrice: oldPrice != null ? '${_fmtPrice(oldPrice)} lei' : null,
         discountedPrice: price != null ? '${_fmtPrice(price)} lei' : null,
         discountPercent: percent?.toString(),
