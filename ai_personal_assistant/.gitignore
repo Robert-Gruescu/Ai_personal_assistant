@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Chei secrete si configurare (NU se urca pe GitHub!)
+.env
+
+# Fisiere personale / documente de licenta (nu se urca pe GitHub)
+_privat_nu_github/

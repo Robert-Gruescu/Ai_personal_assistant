@@ -400,6 +400,7 @@ class _HomeScreenState extends State<HomeScreen>
       _scrollToBottom();
       // Popup cu linkuri de produs (dacă a fost o căutare cu rezultate).
       if (mounted) showProductLinksIfAny(context, result.action);
+      // Input VOCAL în chat → răspunsul se citește (ca la modul Voce).
       await _tts.speak(result.response);
     } catch (e) {
       setState(() {
@@ -451,7 +452,8 @@ class _HomeScreenState extends State<HomeScreen>
       _scrollToBottom();
       // Popup cu linkuri de produs (dacă a fost o căutare cu rezultate).
       if (mounted) showProductLinksIfAny(context, result.action);
-      await _tts.speak(result.response);
+      // În modul Chat NU se citește automat răspunsul.
+      // Citirea se face doar la apăsarea butonului „Ascultă".
     } catch (e) {
       setState(() {
         isProcessing = false;

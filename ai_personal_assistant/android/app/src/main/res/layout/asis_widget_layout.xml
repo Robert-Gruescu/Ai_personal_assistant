@@ -22,7 +22,7 @@
 
         <LinearLayout
             android:id="@+id/widget_zone_tasks"
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
             android:orientation="vertical"
@@ -54,7 +54,7 @@
 
         <LinearLayout
             android:id="@+id/widget_zone_shopping"
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
             android:orientation="vertical"

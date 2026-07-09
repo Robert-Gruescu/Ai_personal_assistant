@@ -402,18 +402,68 @@ class SearchService {
   /// eliminând umplutura (preț, unități, articole, „în RO" etc.).
   List<String> _productTokens(String query) {
     const stop = {
-      'pret', 'preturi', 'costa', 'cost', 'cat', 'cata', 'cate', 'face',
-      'este', 'sunt', 'are', 'mult', 'multa', 'lei', 'ron', 'la', 'din', 'in',
-      'ro', 'romania', 'magazin', 'magazinul', 'un', 'o', 'de', 'despre',
-      'vreau', 'sa', 'imi', 'mi', 'spui', 'spune', 'cumpar', 'caut', 'gaseste',
-      'doza', 'doze', 'sticla', 'cutie', 'pachet', 'punga', 'bucata', 'buc',
-      'kg', 'gram', 'grame', 'litru', 'litri', 'cu', 'si', 'sau', 'ai',
-      'aveti', 'avem', 'pe', 'el', 'ea', 'cum',
+      'pret',
+      'preturi',
+      'costa',
+      'cost',
+      'cat',
+      'cata',
+      'cate',
+      'face',
+      'este',
+      'sunt',
+      'are',
+      'mult',
+      'multa',
+      'lei',
+      'ron',
+      'la',
+      'din',
+      'in',
+      'ro',
+      'romania',
+      'magazin',
+      'magazinul',
+      'un',
+      'o',
+      'de',
+      'despre',
+      'vreau',
+      'sa',
+      'imi',
+      'mi',
+      'spui',
+      'spune',
+      'cumpar',
+      'caut',
+      'gaseste',
+      'doza',
+      'doze',
+      'sticla',
+      'cutie',
+      'pachet',
+      'punga',
+      'bucata',
+      'buc',
+      'kg',
+      'gram',
+      'grame',
+      'litru',
+      'litri',
+      'cu',
+      'si',
+      'sau',
+      'ai',
+      'aveti',
+      'avem',
+      'pe',
+      'el',
+      'ea',
+      'cum',
     };
-    return _normalizeShop(query)
-        .split(' ')
-        .where((w) => w.length >= 3 && !stop.contains(w))
-        .toList();
+    return _normalizeShop(
+      query,
+    ).split(' ').where((w) => w.length >= 3 && !stop.contains(w)).toList();
   }
 
   /// Potrivire locală pe tokeni, normalizată și bidirecțională.
@@ -427,8 +477,10 @@ class SearchService {
 
     for (final p in products) {
       final nameNorm = _normalizeShop(p.name);
-      final nameTokens =
-          nameNorm.split(' ').where((w) => w.length >= 3).toList();
+      final nameTokens = nameNorm
+          .split(' ')
+          .where((w) => w.length >= 3)
+          .toList();
 
       int score = 0;
       // direcția 1: cuvintele din întrebare apar în numele produsului
@@ -473,8 +525,15 @@ class SearchService {
 
   /// Domenii de încredere pentru linkul de internet.
   static const List<String> _trustedLinkDomains = [
-    'emag.ro', 'pret.ro', 'compari.ro', 'carrefour.ro', 'auchan.ro',
-    'mega-image.ro', 'kaufland.ro', 'lidl.ro', 'profi.ro',
+    'emag.ro',
+    'pret.ro',
+    'compari.ro',
+    'carrefour.ro',
+    'auchan.ro',
+    'mega-image.ro',
+    'kaufland.ro',
+    'lidl.ro',
+    'profi.ro',
   ];
 
   /// Construiește linkurile de produs pentru popup:
@@ -490,7 +549,8 @@ class SearchService {
     for (final p in resp.shopProducts.take(2)) {
       links.add({
         'label': p.name,
-        'subtitle': '${p.price.toStringAsFixed(2)} lei — ${DiscountService.storeName}',
+        'subtitle':
+            '${p.price.toStringAsFixed(2)} lei — ${DiscountService.storeName}',
         'url': '$_storeBaseUrl/produs/${p.id}',
         'source': 'shop',
       });

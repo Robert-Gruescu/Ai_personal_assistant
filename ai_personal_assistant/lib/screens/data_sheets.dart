@@ -80,11 +80,15 @@ class _TasksSheetState extends State<TasksSheet> {
             children: [
               const Icon(Icons.checklist_rounded, color: Colors.indigo, size: 24),
               const SizedBox(width: 8),
-              const Text(
-                'Task-uri active',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              const Expanded(
+                child: Text(
+                  'Task-uri active',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
               ),
-              const Spacer(),
+              const SizedBox(width: 8),
               Text(
                 '${_tasks.length} task${_tasks.length != 1 ? "-uri" : ""}',
                 style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
@@ -277,11 +281,14 @@ class _ShoppingSheetState extends State<ShoppingSheet> {
                 size: 24,
               ),
               const SizedBox(width: 8),
-              const Text(
-                'Lista de cumpărături',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              const Expanded(
+                child: Text(
+                  'Lista de cumpărături',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
               ),
-              const Spacer(),
               TextButton(
                 onPressed: () {
                   setState(() {
