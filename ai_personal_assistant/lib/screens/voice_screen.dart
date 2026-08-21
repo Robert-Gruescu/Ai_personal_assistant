@@ -25,7 +25,7 @@ class VoiceScreen extends StatefulWidget {
 }
 
 class _VoiceScreenState extends State<VoiceScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final LocalAssistantService _service = LocalAssistantService();
   final SpeechToTextService _stt = SpeechToTextService();
   final TextToSpeechService _tts = TextToSpeechService();
@@ -43,7 +43,11 @@ class _VoiceScreenState extends State<VoiceScreen>
   bool _apiKeyConfigured = false;
   bool _emailConfigured = false;
 
+  /// Pulsul inelului (respirație / reacție la voce).
   late final AnimationController _anim;
+
+  /// Rotația lentă și continuă a arcului, ca pe site.
+  late final AnimationController _spin;
 
   @override
   void initState() {
@@ -51,6 +55,10 @@ class _VoiceScreenState extends State<VoiceScreen>
     _anim = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1600),
+    )..repeat();
+    _spin = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 14),
     )..repeat();
     _initServices();
   }
@@ -188,6 +196,7 @@ class _VoiceScreenState extends State<VoiceScreen>
   @override
   void dispose() {
     _anim.dispose();
+    _spin.dispose();
     // STT/TTS sunt Singleton partajate cu ecranul Chat — nu le închidem aici,
     // doar oprim orice activitate în curs la părăsirea ecranului.
     _stt.stopListening();
@@ -195,51 +204,17 @@ class _VoiceScreenState extends State<VoiceScreen>
     super.dispose();
   }
 
-  // ── Culori în funcție de stare ──────────────────────────────────────────
-  List<Color> get _ringColors {
+  // ── Culori în funcție de stare (aceeași paletă ca pe site) ─────────────
+  Color get _stateColor {
     switch (_state) {
-      case VoiceState.listening:
-        return const [
-          Color(0xFF6D5DF6),
-          Color(0xFF46C2FF),
-          Color(0xFF6D5DF6),
-        ];
-      case VoiceState.processing:
-        return const [
-          Color(0xFFFFA63D),
-          Color(0xFFFF5E8A),
-          Color(0xFFFFA63D),
-        ];
-      case VoiceState.speaking:
-        return const [
-          Color(0xFF36D1A6),
-          Color(0xFF46C2FF),
-          Color(0xFF8E7BFF),
-          Color(0xFF36D1A6),
-        ];
       case VoiceState.idle:
-        return const [
-          Color(0xFFEC6EAD),
-          Color(0xFFFFB36B),
-          Color(0xFFFFE16B),
-          Color(0xFF7BE0AD),
-          Color(0xFF6DA8FF),
-          Color(0xFF9D7BFF),
-          Color(0xFFEC6EAD),
-        ];
-    }
-  }
-
-  IconData get _centerIcon {
-    switch (_state) {
+        return const Color(0xFF5C6BFF);
       case VoiceState.listening:
-        return Icons.mic_rounded;
+        return const Color(0xFF8E7BFF);
       case VoiceState.processing:
-        return Icons.more_horiz_rounded;
+        return const Color(0xFF4FD1C5);
       case VoiceState.speaking:
-        return Icons.graphic_eq_rounded;
-      case VoiceState.idle:
-        return Icons.monitor_heart_outlined;
+        return const Color(0xFFF0A020);
     }
   }
 
@@ -314,25 +289,30 @@ class _VoiceScreenState extends State<VoiceScreen>
                   child: GestureDetector(
                     onTap: _toggleMic,
                     child: AnimatedBuilder(
-                      animation: _anim,
+                      animation: Listenable.merge([_anim, _spin]),
                       builder: (context, _) {
                         return CustomPaint(
                           size: const Size(260, 260),
                           painter: _RingPainter(
-                            colors: _ringColors,
+                            color: _stateColor,
                             t: _anim.value,
+                            spin: _spin.value,
                             state: _state,
                             level: _level,
-                            isDark: isDark,
                           ),
-                          child: SizedBox(
+                          child: const SizedBox(
                             width: 260,
                             height: 260,
                             child: Center(
-                              child: Icon(
-                                _centerIcon,
-                                size: 56,
-                                color: const Color(0xFF8E7BFF),
+                              child: SizedBox(
+                                width: 96,
+                                height: 96,
+                                child: Image(
+                                  image: AssetImage(
+                                    'assets/icon/app_icon_foreground.png',
+                                  ),
+                                  fit: BoxFit.contain,
+                                ),
                               ),
                             ),
                           ),
@@ -687,20 +667,36 @@ class _VoiceScreenState extends State<VoiceScreen>
   }
 }
 
-/// Desenează inelul cu gradient, scalat/animat în funcție de stare.
+/// Desenează inelul animat, identic cu cel de pe site-ul de prezentare:
+/// un arc subțire, cu o breșă, care se rotește lent, un halou colorat în
+/// spate și un disc întunecat în mijloc, peste care stă sigla.
 class _RingPainter extends CustomPainter {
-  final List<Color> colors;
-  final double t; // 0..1 progres animație continuă
+  /// Culoarea stării curente (repaus / ascultare / gândire / vorbire).
+  final Color color;
+
+  /// Progresul pulsului, 0..1 (respirație și reacție la voce).
+  final double t;
+
+  /// Progresul rotației arcului, 0..1 (un tur complet la 14 secunde).
+  final double spin;
+
   final VoiceState state;
-  final double level; // nivel sunet 0..1 (la ascultare)
-  final bool isDark;
+
+  /// Nivelul sunetului 0..1, folosit doar cât timp ascultă.
+  final double level;
+
+  /// Cât din cerc e desenat (restul rămâne breșă), ca pe site.
+  static const double _arcFraction = 0.61;
+
+  /// Violetul haloului din jurul discului — la fel în toate stările.
+  static const Color _haloColor = Color(0xFF8E7BFF);
 
   _RingPainter({
-    required this.colors,
+    required this.color,
     required this.t,
+    required this.spin,
     required this.state,
     required this.level,
-    required this.isDark,
   });
 
   @override
@@ -712,60 +708,89 @@ class _RingPainter extends CustomPainter {
     double pulse;
     switch (state) {
       case VoiceState.listening:
-        pulse = 0.86 + level * 0.14; // reactiv la voce
+        pulse = 0.90 + level * 0.10; // reactiv la voce
         break;
       case VoiceState.speaking:
-        pulse = 0.9 + 0.06 * sin(t * 2 * pi * 2); // ritmic
+        pulse = 0.94 + 0.04 * sin(t * 2 * pi * 2); // ritmic
         break;
       case VoiceState.processing:
-        pulse = 0.9 + 0.03 * sin(t * 2 * pi * 3);
+        pulse = 0.94 + 0.02 * sin(t * 2 * pi * 3);
         break;
       case VoiceState.idle:
-        pulse = 0.92 + 0.03 * sin(t * 2 * pi); // respirație lentă
+        pulse = 0.95 + 0.02 * sin(t * 2 * pi); // respirație lentă
         break;
     }
 
-    final radius = maxRadius * pulse;
-    final stroke = 16.0;
+    final radius = maxRadius * 0.94 * pulse;
+    const stroke = 4.5;
+    final innerRadius = radius * 0.72;
 
-    // Rotația gradientului (mai rapidă la procesare).
-    final rotation = state == VoiceState.processing
-        ? t * 2 * pi * 1.5
-        : t * 2 * pi * 0.4;
+    // 1. Halou colorat în spate, în tonul stării.
+    final glowRadius = radius * 1.32;
+    final glowPaint = Paint()
+      ..shader = RadialGradient(
+        colors: [
+          color.withValues(alpha: 0.34),
+          color.withValues(alpha: 0.10),
+          color.withValues(alpha: 0.0),
+        ],
+        stops: const [0.0, 0.55, 1.0],
+      ).createShader(Rect.fromCircle(center: center, radius: glowRadius));
+    canvas.drawCircle(center, glowRadius, glowPaint);
 
+    // 2. Discul din mijloc, cu aura lui violet (ca umbra de pe site).
+    final haloPaint = Paint()
+      ..color = _haloColor.withValues(alpha: 0.45)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 26);
+    canvas.drawCircle(center, innerRadius, haloPaint);
+
+    canvas.drawCircle(
+      center,
+      innerRadius,
+      Paint()..color = const Color(0xFF141C33),
+    );
+    canvas.drawCircle(
+      center,
+      innerRadius,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..color = Colors.white.withValues(alpha: 0.10),
+    );
+
+    // 3. Arcul care se rotește, cu gradient pe lungimea lui.
     final ringRect = Rect.fromCircle(
       center: center,
       radius: radius - stroke / 2,
     );
-
-    // Halou exterior (glow) — mai puternic când e activ.
-    final glowAlpha = state == VoiceState.idle ? 0.18 : 0.30;
-    final glowPaint = Paint()
-      ..color = colors.first.withValues(alpha: glowAlpha)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 22);
-    canvas.drawCircle(center, radius, glowPaint);
-
-    // Cercul alb interior.
-    final innerPaint = Paint()
-      ..color = isDark ? const Color(0xFF20223A) : Colors.white;
-    canvas.drawCircle(center, radius - stroke, innerPaint);
-
-    // Inelul cu gradient.
+    final rotation = spin * 2 * pi;
     final ringPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = stroke
       ..strokeCap = StrokeCap.round
       ..shader = SweepGradient(
-        colors: colors,
+        colors: [
+          color.withValues(alpha: 0.95),
+          color.withValues(alpha: 0.15),
+          color.withValues(alpha: 0.90),
+        ],
+        stops: const [0.0, 0.55, 1.0],
         transform: GradientRotation(rotation),
       ).createShader(ringRect);
-    canvas.drawArc(ringRect, 0, 2 * pi, false, ringPaint);
+    canvas.drawArc(
+      ringRect,
+      rotation,
+      2 * pi * _arcFraction,
+      false,
+      ringPaint,
+    );
   }
 
   @override
   bool shouldRepaint(covariant _RingPainter old) =>
       old.t != t ||
+      old.spin != spin ||
       old.state != state ||
       old.level != level ||
-      old.colors != colors;
+      old.color != color;
 }
